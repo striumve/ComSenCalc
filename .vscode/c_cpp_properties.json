@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "STM32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/lyx/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
+                "${workspaceFolder}/lyx/Drivers/CMSIS/Include",
+                "${workspaceFolder}/lyx/Drivers/STM32F1xx_HAL_Driver/Inc"
+            ],
+            "defines": [
+                "USE_HAL_DRIVER",
+                "STM32F103xB"
+            ],
+            "compilerPath": "D:/Software/ArmGNUToolchain/bin/arm-none-eabi-gcc.exe",
+            "intelliSenseMode": "gcc-arm",
+            "cStandard": "c11"
+        }
+    ],
+    "version": 4
+}
