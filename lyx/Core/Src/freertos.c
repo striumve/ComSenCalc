@@ -25,7 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "screen.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -242,6 +242,9 @@ void KeyTaskFunc(void *argument)
 void lcdTaskFunc(void *argument)
 {
     /* USER CODE BEGIN lcdTaskFunc */
+    screen_init();
+    screen_write_lines("Calculator", "Init OK");
+
     /* Infinite loop */
     for (;;)
     {
