@@ -1,22 +1,9 @@
 #ifndef APP_H
 #define APP_H
 
-/* 计算器应用程序。
- *
- * 数据流：
- *
- *   KeyTask ---------> controllerTask ------> computeTask
- *   (TTP229 读取、       (编辑表达式、          (调用引擎库的
- *    滤波、模型识别      光标、Shift)           calculator_evaluate)
- *    -> 按键编号)             |                      |
- *          |                  v                      v
- *          +------------> displayQueue <-------------+
- *                             |
- *                             v
- *                         lcdTask ---> LCD1602
- *
- * app_init() 必须在内核初始化之后、调度器启动之前调用，和其他
- * CMSIS-RTOS2 对象的创建时机保持一致。
+ /*
+    数据流：
+    KeyTask读取按键 -> controllerTask表达式处理 -> computeTask计算 -> displayQueue -> lcdTask显示
  */
 
 void app_init(void);

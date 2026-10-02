@@ -3,17 +3,15 @@
 
 #include <stdint.h>
 
-/* 物理按键编号，就是 TTP229 那一对芯片报出来的编号。
- * 面板是 6 行 x 5 列，编号按行优先：
- * index = (行 - 1) * 5 + (列 - 1)。
- *
- *   第 1 行:  Shift   Back    Mode    上      OK
- *   第 2 行:  (       )       左      下      右
- *   第 3 行:  7       8       9       DEL     AC
- *   第 4 行:  4       5       6       *       /
- *   第 5 行:  1       2       3       +       -
- *   第 6 行:  0       .       10^     FMT     EXE
- */
+/* 
+  Shift   Back    Mode    上      OK
+  (       )       左      下      右
+  7       8       9       DEL     AC
+  4       5       6       *       /
+  1       2       3       +       -
+  0       .       10^     FMT     EXE
+*/
+
 typedef enum
 {
   KEY_SHIFT = 0,
@@ -48,23 +46,18 @@ typedef enum
 
   KEY_0 = 25,
   KEY_DOT = 26,
-  KEY_EXP = 27, /* "10^" 键，插入 'E' 科学计数法 */
+  KEY_EXP = 27, 
   KEY_FMT = 28,
   KEY_EXE = 29
 } key_id_t;
 
 #define KEY_COUNT 30U
 
-/* 未按 Shift 时插入的单个字符。值为 NUL 表示这是由控制器处理的
- * 功能键。 */
+/* 未按 Shift 时插入的单个字符。NULL表示这是功能键。 */
 extern const char key_primary[KEY_COUNT];
 
-/* 按下 Shift 后再按键时插入的文本；NULL 表示该第二功能未使用。
- *
- * 这些是给人看的功能名，不是引擎的语法。计算器引擎解析的是单字母函数名
- * （s=sin、c=cos、t=tan、l=log10、n=ln、q=sqrt），所以 app.c 在求值之前
- * 会把这里的字符串翻译成那种形式。
- */
+// 按下 Shift 后的文本；NULL 表示该第二功能未使用。
+// 计算器引擎解释时采用单个字母，s=sin, c=cos, t=tan, l=log10, n=ln ,q=sqrt
 extern const char *const key_shifted_text[KEY_COUNT];
 
 #endif

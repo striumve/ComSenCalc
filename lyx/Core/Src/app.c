@@ -651,104 +651,8 @@ void app_compute_task(void)
     }
 }
 
-/* 置 1 时把 LCD 任务换成 TTP229 原始数据转储：第一行显示芯片1 报出的通道，
- * 第二行显示芯片2 报出的通道。它完全绕过 touch_model 和按键映射表，直接
- * 显示硬件真正吐出的东西。置回 0 就是正常的计算器显示。 */
-#define APP_KEYPAD_DEBUG 0
-
 void app_lcd_task(void)
 {
-#if APP_KEYPAD_DEBUG
-    char line1[APP_TEXT_MAX];
-    char line2[APP_TEXT_MAX];
-    uint8_t i;
-
-    keypad_init();
-    screen_init();
-    screen_write_lines("1:4us 2:100us", "press a key");
-
-    for (;;)
-    {
-        uint16_t chip_a = keypad_debug_raw_speed(1U, 4U);
-        uint16_t chip_b = keypad_debug_raw_speed(1U, 100U);
-
-        /* 列出每个芯片被触发的通道，例如 "1:2,10"。 */
-        {
-            uint8_t pos = 0U;
-            uint8_t shown = 0U;
-
-            line1[pos] = '4';
-            pos++;
-            line1[pos] = ':';
-            pos++;
-            for (i = 0U; (i < 16U) && (shown < 4U); i++)
-            {
-                if ((chip_a & (1U << i)) == 0U)
-                {
-                    continue;
-                }
-                if (shown > 0U)
-                {
-                    line1[pos] = ',';
-                    pos++;
-                }
-                if (i >= 10U)
-                {
-                    line1[pos] = '1';
-                    pos++;
-                    line1[pos] = (char)('0' + (i - 10U));
-                    pos++;
-                }
-                else
-                {
-                    line1[pos] = (char)('0' + i);
-                    pos++;
-                }
-                shown++;
-            }
-            line1[pos] = '\0';
-        }
-
-        {
-            uint8_t pos = 0U;
-            uint8_t shown = 0U;
-
-            line2[pos] = 'S';
-            pos++;
-            line2[pos] = ':';
-            pos++;
-            for (i = 0U; (i < 16U) && (shown < 4U); i++)
-            {
-                if ((chip_b & (1U << i)) == 0U)
-                {
-                    continue;
-                }
-                if (shown > 0U)
-                {
-                    line2[pos] = ',';
-                    pos++;
-                }
-                if (i >= 10U)
-                {
-                    line2[pos] = '1';
-                    pos++;
-                    line2[pos] = (char)('0' + (i - 10U));
-                    pos++;
-                }
-                else
-                {
-                    line2[pos] = (char)('0' + i);
-                    pos++;
-                }
-                shown++;
-            }
-            line2[pos] = '\0';
-        }
-
-        screen_write_lines(line1, line2);
-        osDelay(100U);
-    }
-#else
     display_msg_t msg;
 
     screen_init();
@@ -763,5 +667,4 @@ void app_lcd_task(void)
                                msg.cursor_column);
         }
     }
-#endif
 }

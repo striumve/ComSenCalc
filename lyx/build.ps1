@@ -126,10 +126,13 @@ $linkFlags = @("-mcpu=cortex-m3", "-mthumb",
                "-Wl,--gc-sections",
                "-Wl,--print-memory-usage")
 
+# The calculator engine now lives in Core/Src/calculator_engine.c, so
+# lib/libcalculator_engine.a is no longer linked (kept as a reference).
+# NOTE: keep this file ASCII-only - Windows PowerShell reads .ps1 as ANSI
+# and non-ASCII comments break the parser.
 $libs = @(
     (Join-Path $root "lib/libtouch_filter.a")
     (Join-Path $root "lib/libtouch_model.a")
-    (Join-Path $root "lib/libcalculator_engine.a")
     "-lm"
 )
 
