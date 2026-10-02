@@ -31,4 +31,13 @@ calc_status_t calculator_evaluate(const char *expression,
 
 calc_status_t calculator_solve_linear(float a, float b, float *x);
 
+/* 解一元二次方程 a*x^2 + b*x + c = 0。
+ *
+ * x1 恒定是较大的实根（实根情形），x2 是另一个；判别式为负时 x1 带正虚部。
+ * a == 0 时退化成一次方程，两个根相同。
+ * 返回 CALC_OK；a == 0 且 b == 0 且 c != 0 时返回 CALC_DOMAIN（无解）。 */
+calc_status_t calculator_solve_quadratic(float a, float b, float c,
+                                         calc_complex_t *x1,
+                                         calc_complex_t *x2);
+
 #endif

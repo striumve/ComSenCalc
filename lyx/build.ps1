@@ -126,8 +126,8 @@ $linkFlags = @("-mcpu=cortex-m3", "-mthumb",
                "-Wl,--gc-sections",
                "-Wl,--print-memory-usage")
 
-# The calculator engine now lives in Core/Src/calculator_engine.c, so
-# lib/libcalculator_engine.a is no longer linked (kept as a reference).
+# libcalculator_engine.a was removed: the calculator engine now lives in
+# Core/Src/calculator_engine.c and is compiled like any other project source.
 # NOTE: keep this file ASCII-only - Windows PowerShell reads .ps1 as ANSI
 # and non-ASCII comments break the parser.
 $libs = @(

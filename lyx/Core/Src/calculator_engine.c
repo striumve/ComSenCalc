@@ -322,7 +322,7 @@ static calc_complex_t parse_number(calc_ctx_t *ctx)
 }
 
 /* ---------------------------------------------------------------------------
- * 基本表达式：数字、括号、常量、函数
+ * primary：数字、括号、常量、函数
  * ------------------------------------------------------------------------ */
 static uint8_t is_function_letter(char c)
 {
@@ -425,7 +425,7 @@ static calc_complex_t parse_primary(calc_ctx_t *ctx)
 }
 
 /* ---------------------------------------------------------------------------
- * 优先级
+ * 优先级处理
  * ------------------------------------------------------------------------ */
 static calc_complex_t parse_power(calc_ctx_t *ctx)
 {
@@ -605,5 +605,72 @@ calc_status_t calculator_solve_linear(float a, float b, float *x)
     }
 
     *x = -b / a;
+    return CALC_OK;
+}
+
+calc_status_t calculator_solve_quadratic(float a, float b, float c,
+                                         calc_complex_t *x1,
+                                         calc_complex_t *x2)
+{
+    float d;
+
+    if ((x1 == NULL) || (x2 == NULL))
+    {
+        return CALC_SYNTAX;
+    }
+    *x1 = cx(0.0f, 0.0f);
+    *x2 = cx(0.0f, 0.0f);
+
+    if (a == 0.0f)
+    {
+        /* 二次项系数为 0：退化成一次方程，两个根相同。 */
+        float x = 0.0f;
+        calc_status_t st = calculator_solve_linear(b, c, &x);
+
+        if (st != CALC_OK)
+        {
+            return st;
+        }
+        *x1 = cx(x, 0.0f);
+        *x2 = cx(x, 0.0f);
+        return CALC_OK;
+    }
+
+    d = (b * b) - (4.0f * a * c);
+
+    if (d >= 0.0f)
+    {
+        float sd = sqrtf(d);
+        float r_plus = (-b + sd) / (2.0f * a);
+        float r_minus = (-b - sd) / (2.0f * a);
+
+        /* 让 x1 恒定是较大的那个根。否则 (-b+sqrt(D))/(2a) 在 a<0 时反而是
+         * 较小的根，顺序会随 a 的符号变化，不好用。 */
+        if (r_plus >= r_minus)
+        {
+            *x1 = cx(r_plus, 0.0f);
+            *x2 = cx(r_minus, 0.0f);
+        }
+        else
+        {
+            *x1 = cx(r_minus, 0.0f);
+            *x2 = cx(r_plus, 0.0f);
+        }
+    }
+    else
+    {
+        float sd = sqrtf(-d);
+        float re = -b / (2.0f * a);
+        float im = sd / (2.0f * a);
+
+        /* a 为负时上面算出的虚部是负的，统一让 x1 带正虚部。 */
+        if (im < 0.0f)
+        {
+            im = -im;
+        }
+        *x1 = cx(re, im);
+        *x2 = cx(re, -im);
+    }
+
     return CALC_OK;
 }

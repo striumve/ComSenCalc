@@ -48,6 +48,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Core/Src/screen.c
     Core/Src/keypad.c
+    Core/Src/keymap.c
+    Core/Src/calculator_engine.c
+    Core/Src/app.c
 )
 
 # Add include paths

@@ -108,6 +108,17 @@ static uint8_t s_shift;
 static uint8_t s_allow_complex;
 static calc_angle_unit_t s_angle;
 
+/* 解二次方程模式。主页按 Shift + . 进入，再按一次退出。
+ *
+ * 流程：输入 a，EXE，输入 b，EXE，输入 c，EXE -> 第一行 x1、第二行 x2。
+ * 每一步的输入都走完整的表达式求值，所以系数可以写成 1/3、q2 之类。 */
+static uint8_t s_solve_mode;               /* 0=计算器主页 1=解方程 */
+static uint8_t s_solve_step;               /* 已录入的系数个数 0..2 */
+static uint8_t s_solved;                   /* 1=正在显示结果 */
+static float s_coeff[3];                   /* a、b、c */
+static char s_root1[APP_TEXT_MAX];
+static char s_root2[APP_TEXT_MAX];
+
 /* ---------------------------------------------------------------------------
  * 小的字符串 / 数字辅助函数。链接时用了 --specs=nano.specs，printf 不支持
  * 浮点，所以数字全部手工格式化。
@@ -204,8 +215,18 @@ static void format_number(char *dst, uint8_t size, float value)
     }
     if (value < 0.0f)
     {
-        append_str(dst, size, &pos, "-");
-        value = -value;
+        /* 小到 4 位小数都显示不出来时就当 0。
+         * 否则 cos(90) 这类结果是 -8.7e-8，会先打 '-' 再打 '0'，
+         * 屏幕上显示成难看的 "-0"。 */
+        if (value > -0.00005f)
+        {
+            value = 0.0f;
+        }
+        else
+        {
+            append_str(dst, size, &pos, "-");
+            value = -value;
+        }
     }
 
     /* 整数值就不显示小数部分。 */
@@ -351,6 +372,118 @@ static void display_to_engine(const char *display, char *engine, uint8_t size)
     engine[out] = '\0';
 }
 
+/* 把结果值格式化成文本：虚部可忽略时只显示实数，否则显示 a+bi。 */
+static void format_complex(char *dst, uint8_t size, calc_complex_t value)
+{
+    if (fabsf(value.imag) > 1.0e-6f)
+    {
+        uint8_t pos = 0U;
+
+        dst[0] = '\0';
+        format_number(dst, size, value.real);
+        pos = (uint8_t)strlen(dst);
+        if ((pos < (uint8_t)(size - 1U)) && (value.imag >= 0.0f))
+        {
+            append_str(dst, size, &pos, "+");
+        }
+        format_number(dst + pos, (uint8_t)(size - pos), value.imag);
+        pos = (uint8_t)strlen(dst);
+        append_str(dst, size, &pos, "i");
+        return;
+    }
+    format_number(dst, size, value.real);
+}
+
+/* 把文本右对齐铺进 16 列；比屏幕宽时保留前面的字符。 */
+static void align_right(char *dst, const char *text)
+{
+    uint8_t length = (uint8_t)strlen(text);
+    uint8_t pad = 0U;
+    uint8_t i;
+
+    if (length > APP_LCD_COLS)
+    {
+        length = APP_LCD_COLS;
+    }
+    else
+    {
+        pad = (uint8_t)(APP_LCD_COLS - length);
+    }
+
+    for (i = 0U; i < pad; i++)
+    {
+        dst[i] = ' ';
+    }
+    for (i = 0U; i < length; i++)
+    {
+        dst[pad + i] = text[i];
+    }
+    dst[APP_LCD_COLS] = '\0';
+}
+
+/* ---------------------------------------------------------------------------
+ * 解二次方程
+ * ------------------------------------------------------------------------ */
+
+/* 用当前的输入求出一个系数。输入走完整表达式求值，返回 0 表示失败。 */
+static uint8_t solve_read_coefficient(float *out)
+{
+    char engine[APP_EXPR_MAX + 1U];
+    calc_complex_t result;
+
+    if (s_len == 0U)
+    {
+        return 0U; /* 空输入，EXE 不响应 */
+    }
+
+    display_to_engine(s_expr, engine, (uint8_t)sizeof(engine));
+    result.real = 0.0f;
+    result.imag = 0.0f;
+
+    if (calculator_evaluate(engine, s_angle, 0U, s_last_answer, &result) != CALC_OK)
+    {
+        return 0U;
+    }
+    if (fabsf(result.imag) > 1.0e-6f)
+    {
+        return 0U; /* 系数必须是实数 */
+    }
+
+    *out = result.real;
+    return 1U;
+}
+
+static void solve_quadratic(void)
+{
+    calc_complex_t r1;
+    calc_complex_t r2;
+
+    if (calculator_solve_quadratic(s_coeff[0], s_coeff[1], s_coeff[2],
+                                   &r1, &r2) != CALC_OK)
+    {
+        /* 只有 a=0 且 b=0 且 c!=0 才会走到这里：无解。 */
+        strncpy(s_root1, "no root", APP_TEXT_MAX - 1U);
+        s_root1[APP_TEXT_MAX - 1U] = '\0';
+        s_root2[0] = '\0';
+        return;
+    }
+
+    format_complex(s_root1, APP_TEXT_MAX, r1);
+    format_complex(s_root2, APP_TEXT_MAX, r2);
+}
+
+static void solve_reset(void)
+{
+    s_solve_step = 0U;
+    s_solved = 0U;
+    s_coeff[0] = 0.0f;
+    s_coeff[1] = 0.0f;
+    s_coeff[2] = 0.0f;
+    s_root1[0] = '\0';
+    s_root2[0] = '\0';
+    expr_clear();
+}
+
 /* ---------------------------------------------------------------------------
  * 显示内容的发布
  * ------------------------------------------------------------------------ */
@@ -399,33 +532,49 @@ static void publish_result(const char *result_text)
     }
     msg.line1[APP_LCD_COLS] = '\0';
 
-    /* 答案在 16 列里右对齐。 */
+    align_right(msg.line2, result_text); /* 答案右对齐 */
+    msg.cursor_enabled = 0U;
+
+    (void)osMessageQueuePut(s_display_queue, &msg, 0U, 0U);
+}
+
+/* 解方程模式的显示：输入阶段第一行显示正在输入的内容、第二行留空；
+ * 出结果时第一行 x1、第二行 x2。 */
+static void publish_solve(void)
+{
+    display_msg_t msg;
+    uint8_t start;
+    uint8_t i;
+
+    memset(&msg, 0, sizeof(msg));
+
+    if (s_solved != 0U)
     {
-        uint8_t length = (uint8_t)strlen(result_text);
-        uint8_t pad = 0U;
-
-        if (length > APP_LCD_COLS)
+        align_right(msg.line1, s_root1);
+        align_right(msg.line2, s_root2);
+        msg.cursor_enabled = 0U;
+    }
+    else
+    {
+        start = (s_cursor > (APP_LCD_COLS - 1U))
+                    ? (uint8_t)(s_cursor - (APP_LCD_COLS - 1U))
+                    : 0U;
+        for (i = 0U; i < APP_LCD_COLS; i++)
         {
-            /* 比屏幕还宽：保留前面的字符。 */
-            length = APP_LCD_COLS;
+            uint8_t index = (uint8_t)(start + i);
+            msg.line1[i] = (index < s_len) ? s_expr[index] : ' ';
         }
-        else
-        {
-            pad = (uint8_t)(APP_LCD_COLS - length);
-        }
-
-        for (i = 0U; i < pad; i++)
+        msg.line1[APP_LCD_COLS] = '\0';
+        for (i = 0U; i < APP_LCD_COLS; i++)
         {
             msg.line2[i] = ' ';
         }
-        for (i = 0U; i < length; i++)
-        {
-            msg.line2[pad + i] = result_text[i];
-        }
         msg.line2[APP_LCD_COLS] = '\0';
-    }
 
-    msg.cursor_enabled = 0U;
+        msg.cursor_enabled = 1U;
+        msg.cursor_row = 0U;
+        msg.cursor_column = (uint8_t)(s_cursor - start);
+    }
 
     (void)osMessageQueuePut(s_display_queue, &msg, 0U, 0U);
 }
@@ -442,6 +591,8 @@ void app_init(void)
     s_angle = CALC_ANGLE_DEG;
     s_allow_complex = 0U;
     s_shift = 0U;
+    s_solve_mode = 0U;
+    solve_reset();
     expr_clear();
 }
 
@@ -498,6 +649,102 @@ void app_controller_task(void)
             continue;
         }
 
+        /* ---- 解二次方程模式 ---- */
+        if (s_solve_mode != 0U)
+        {
+            /* Shift + . 随时退出，回到计算器主页。 */
+            if ((key == KEY_DOT) && (s_shift != 0U))
+            {
+                s_shift = 0U;
+                s_solve_mode = 0U;
+                solve_reset();
+                publish_status();
+                continue;
+            }
+
+            if (key == KEY_SHIFT)
+            {
+                s_shift = (s_shift == 0U) ? 1U : 0U;
+                continue;
+            }
+
+            /* 结果已经显示时，再按任何输入类按键就开始解下一个方程。 */
+            if (s_solved != 0U)
+            {
+                if ((key == KEY_EXE) || (key == KEY_OK) || (key == KEY_DEL) ||
+                    (key == KEY_BACK) || (key == KEY_AC) ||
+                    (key == KEY_LEFT) || (key == KEY_RIGHT))
+                {
+                    continue; /* 忽略 */
+                }
+                solve_reset();
+            }
+
+            switch (key)
+            {
+                case KEY_EXE:
+                case KEY_OK:
+                {
+                    float value = 0.0f;
+
+                    if (solve_read_coefficient(&value) != 0U)
+                    {
+                        s_coeff[s_solve_step] = value;
+                        s_solve_step++;
+                        expr_clear();
+                        if (s_solve_step >= 3U)
+                        {
+                            solve_quadratic();
+                            s_solved = 1U;
+                        }
+                    }
+                    break;
+                }
+
+                case KEY_AC:
+                    expr_clear();
+                    break;
+
+                case KEY_BACK:
+                case KEY_DEL:
+                    expr_backspace();
+                    break;
+
+                case KEY_LEFT:
+                    if (s_cursor > 0U)
+                    {
+                        s_cursor--;
+                    }
+                    break;
+
+                case KEY_RIGHT:
+                    if (s_cursor < s_len)
+                    {
+                        s_cursor++;
+                    }
+                    break;
+
+                default:
+                    if (key < KEY_COUNT)
+                    {
+                        if ((s_shift != 0U) && (key_shifted_text[key] != NULL))
+                        {
+                            expr_insert_text(key_shifted_text[key]);
+                        }
+                        else if (key_primary[key] != '\0')
+                        {
+                            expr_insert(key_primary[key]);
+                        }
+                    }
+                    break;
+            }
+
+            s_shift = 0U;
+            publish_solve();
+            continue;
+        }
+
+        /* ---- 计算器主页 ---- */
         switch (key)
         {
             case KEY_SHIFT:
@@ -554,6 +801,20 @@ void app_controller_task(void)
                     request.allow_complex = s_allow_complex;
                     (void)osMessageQueuePut(s_calc_queue, &request, 0U, 0U);
                 }
+                s_shift = 0U;
+                break;
+
+            /* 小数点键：Shift + . 进入解二次方程模式。 */
+            case KEY_DOT:
+                if (s_shift != 0U)
+                {
+                    s_shift = 0U;
+                    s_solve_mode = 1U;
+                    solve_reset();
+                    publish_solve();
+                    continue; /* 已经发过显示消息，跳过末尾的 publish */
+                }
+                expr_insert(key_primary[key]);
                 s_shift = 0U;
                 break;
 
@@ -626,20 +887,10 @@ void app_compute_task(void)
             continue;
         }
 
-        if ((request.allow_complex != 0U) && (fabsf(result.imag) > 1.0e-6f))
+        /* 复数模式下虚部有意义；否则只显示实部。 */
+        if (request.allow_complex != 0U)
         {
-            uint8_t pos = 0U;
-
-            text[0] = '\0';
-            format_number(text, APP_TEXT_MAX, result.real);
-            pos = (uint8_t)strlen(text);
-            if ((pos < (APP_TEXT_MAX - 1U)) && (result.imag >= 0.0f))
-            {
-                append_str(text, APP_TEXT_MAX, &pos, "+");
-            }
-            format_number(text + pos, (uint8_t)(APP_TEXT_MAX - pos), result.imag);
-            pos = (uint8_t)strlen(text);
-            append_str(text, APP_TEXT_MAX, &pos, "i");
+            format_complex(text, APP_TEXT_MAX, result);
         }
         else
         {

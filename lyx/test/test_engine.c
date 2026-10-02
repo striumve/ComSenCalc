@@ -1,5 +1,4 @@
-/* 计算器引擎的宿主机测试（不参与固件编译）。
- * 在电脑上编译运行，验证表达式求值是否符合预期。 */
+/* AI自用，用于测试代码是否可行 */
 
 #include "../Core/Inc/calculator_engine.h"
 
@@ -93,6 +92,17 @@ int main(void)
   expect("s(p/2)", CALC_ANGLE_RAD, 0U, zero, CALC_OK, 1.0f, 0.0f); /* sin(pi/2) */
   ok("s90", 1.0f);
 
+  printf("--- 非复数模式下，实表达式的虚部必须精确为 0 ---\n");
+  /* ok() 用的就是 allow_complex=0，所以下面每个用例都在证明：
+   * 纯实表达式不会被误判成 CALC_DOMAIN。
+   * 这几个最容易出问题：
+   *   c90   -> cos 的虚部 = -sin(pi/2)*sinh(0) = -1 * 0 = -0.0f
+   *   s180  -> sin(pi) 在 float 下是 -8.7e-8，不是精确 0
+   *   q(2)*q(2) -> 先开方再相乘，中间值带根号 */
+  ok("c90", 0.0f);
+  ok("s180", 0.0f);
+  ok("q(2)*q(2)", 2.0f);
+
   printf("--- 常量与科学计数法 ---\n");
   ok("1E3", 1000.0f);
   ok("2.5E-3", 0.0025f);
@@ -174,6 +184,82 @@ int main(void)
 
     st = calculator_solve_linear(0.0f, 5.0f, &x); /* 无解 */
     printf("  0x+5=0 -> status=%d %s\n", (int)st, (st == CALC_DOMAIN) ? "ok" : "FAIL");
+    if (st == CALC_DOMAIN) { g_pass++; } else { g_fail++; }
+  }
+
+  printf("--- calculator_solve_quadratic ---\n");
+  {
+    calc_complex_t r1;
+    calc_complex_t r2;
+    calc_status_t st;
+
+    /* x^2-3x+2=0 -> 2, 1 */
+    st = calculator_solve_quadratic(1.0f, -3.0f, 2.0f, &r1, &r2);
+    printf("  x^2-3x+2=0   -> %.4f, %.4f %s\n", r1.real, r2.real,
+           ((st == CALC_OK) && (fabsf(r1.real - 2.0f) < 1e-4f) &&
+            (fabsf(r2.real - 1.0f) < 1e-4f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(r1.real - 2.0f) < 1e-4f) &&
+        (fabsf(r2.real - 1.0f) < 1e-4f)) { g_pass++; } else { g_fail++; }
+
+    /* 2x^2-4x-6=0 -> 3, -1 */
+    st = calculator_solve_quadratic(2.0f, -4.0f, -6.0f, &r1, &r2);
+    printf("  2x^2-4x-6=0  -> %.4f, %.4f %s\n", r1.real, r2.real,
+           ((st == CALC_OK) && (fabsf(r1.real - 3.0f) < 1e-4f) &&
+            (fabsf(r2.real + 1.0f) < 1e-4f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(r1.real - 3.0f) < 1e-4f) &&
+        (fabsf(r2.real + 1.0f) < 1e-4f)) { g_pass++; } else { g_fail++; }
+
+    /* x^2+2x+1=0 -> -1, -1 重根 */
+    st = calculator_solve_quadratic(1.0f, 2.0f, 1.0f, &r1, &r2);
+    printf("  x^2+2x+1=0   -> %.4f, %.4f %s\n", r1.real, r2.real,
+           ((st == CALC_OK) && (fabsf(r1.real + 1.0f) < 1e-4f) &&
+            (fabsf(r2.real + 1.0f) < 1e-4f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(r1.real + 1.0f) < 1e-4f) &&
+        (fabsf(r2.real + 1.0f) < 1e-4f)) { g_pass++; } else { g_fail++; }
+
+    /* x^2+1=0 -> +i, -i */
+    st = calculator_solve_quadratic(1.0f, 0.0f, 1.0f, &r1, &r2);
+    printf("  x^2+1=0      -> %.4f%+.4fi, %.4f%+.4fi %s\n",
+           r1.real, r1.imag, r2.real, r2.imag,
+           ((st == CALC_OK) && (fabsf(r1.imag - 1.0f) < 1e-4f) &&
+            (fabsf(r2.imag + 1.0f) < 1e-4f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(r1.imag - 1.0f) < 1e-4f) &&
+        (fabsf(r2.imag + 1.0f) < 1e-4f)) { g_pass++; } else { g_fail++; }
+
+    /* x^2-2x+5=0 -> 1+2i, 1-2i */
+    st = calculator_solve_quadratic(1.0f, -2.0f, 5.0f, &r1, &r2);
+    printf("  x^2-2x+5=0   -> %.4f%+.4fi, %.4f%+.4fi %s\n",
+           r1.real, r1.imag, r2.real, r2.imag,
+           ((st == CALC_OK) && (fabsf(r1.real - 1.0f) < 1e-4f) &&
+            (fabsf(r1.imag - 2.0f) < 1e-4f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(r1.real - 1.0f) < 1e-4f) &&
+        (fabsf(r1.imag - 2.0f) < 1e-4f)) { g_pass++; } else { g_fail++; }
+
+    /* -x^2+1=0 -> ±1，x1 恒定是较大根 */
+    st = calculator_solve_quadratic(-1.0f, 0.0f, 1.0f, &r1, &r2);
+    printf("  -x^2+1=0     -> %.4f, %.4f %s\n", r1.real, r2.real,
+           ((st == CALC_OK) && (fabsf(r1.real - 1.0f) < 1e-4f) &&
+            (fabsf(r2.real + 1.0f) < 1e-4f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(r1.real - 1.0f) < 1e-4f) &&
+        (fabsf(r2.real + 1.0f) < 1e-4f)) { g_pass++; } else { g_fail++; }
+
+    /* -x^2-1=0 -> a<0 且判别式<0，x1 应该带正虚部 */
+    st = calculator_solve_quadratic(-1.0f, 0.0f, -1.0f, &r1, &r2);
+    printf("  -x^2-1=0     -> %.4f%+.4fi, %.4f%+.4fi %s\n",
+           r1.real, r1.imag, r2.real, r2.imag,
+           ((st == CALC_OK) && (r1.imag > 0.0f) && (r2.imag < 0.0f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (r1.imag > 0.0f) && (r2.imag < 0.0f)) { g_pass++; } else { g_fail++; }
+
+    /* 0x^2+2x-6=0 -> 退化成一次方程，两根都是 3 */
+    st = calculator_solve_quadratic(0.0f, 2.0f, -6.0f, &r1, &r2);
+    printf("  0x^2+2x-6=0  -> %.4f, %.4f %s\n", r1.real, r2.real,
+           ((st == CALC_OK) && (fabsf(r1.real - 3.0f) < 1e-4f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(r1.real - 3.0f) < 1e-4f)) { g_pass++; } else { g_fail++; }
+
+    /* 0x^2+0x+5=0 -> 无解 */
+    st = calculator_solve_quadratic(0.0f, 0.0f, 5.0f, &r1, &r2);
+    printf("  0x^2+0x+5=0  -> status=%d %s\n", (int)st,
+           (st == CALC_DOMAIN) ? "ok" : "FAIL");
     if (st == CALC_DOMAIN) { g_pass++; } else { g_fail++; }
   }
 
