@@ -26,6 +26,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "screen.h"
+#include "keypad.h"
+#include "touch_filter.h"
+#include "touch_model.h"
+#include "app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -167,6 +171,7 @@ void MX_FREERTOS_Init(void)
 
     /* USER CODE BEGIN RTOS_QUEUES */
     /* add queues, ... */
+    app_init();
     /* USER CODE END RTOS_QUEUES */
 
     /* Create the thread(s) */
@@ -206,11 +211,8 @@ void StartDefaultTask(void *argument)
     /* init code for USB_DEVICE */
     MX_USB_DEVICE_Init();
     /* USER CODE BEGIN StartDefaultTask */
-    /* Infinite loop */
-    for (;;)
-    {
-        osDelay(1);
-    }
+    (void)argument;
+    app_heartbeat_task();
     /* USER CODE END StartDefaultTask */
 }
 
@@ -224,11 +226,8 @@ void StartDefaultTask(void *argument)
 void KeyTaskFunc(void *argument)
 {
     /* USER CODE BEGIN KeyTaskFunc */
-    /* Infinite loop */
-    for (;;)
-    {
-        osDelay(1);
-    }
+    (void)argument;
+    app_key_task();
     /* USER CODE END KeyTaskFunc */
 }
 
@@ -242,14 +241,8 @@ void KeyTaskFunc(void *argument)
 void lcdTaskFunc(void *argument)
 {
     /* USER CODE BEGIN lcdTaskFunc */
-    screen_init();
-    screen_write_lines("Calculator", "Init OK");
-
-    /* Infinite loop */
-    for (;;)
-    {
-        osDelay(1);
-    }
+    (void)argument;
+    app_lcd_task();
     /* USER CODE END lcdTaskFunc */
 }
 
@@ -263,11 +256,8 @@ void lcdTaskFunc(void *argument)
 void calculatorTaskFunc(void *argument)
 {
     /* USER CODE BEGIN calculatorTaskFunc */
-    /* Infinite loop */
-    for (;;)
-    {
-        osDelay(1);
-    }
+    (void)argument;
+    app_compute_task();
     /* USER CODE END calculatorTaskFunc */
 }
 
@@ -281,11 +271,8 @@ void calculatorTaskFunc(void *argument)
 void controllerTaskFunc(void *argument)
 {
     /* USER CODE BEGIN controllerTaskFunc */
-    /* Infinite loop */
-    for (;;)
-    {
-        osDelay(1);
-    }
+    (void)argument;
+    app_controller_task();
     /* USER CODE END controllerTaskFunc */
 }
 

@@ -1,6 +1,6 @@
 #include "screen.h"
 
-/* TIM3 is configured as a 1 MHz up-counter (72 MHz / (71 + 1)). */
+/* TIM3 被配置成 1MHz 递增计数器（72MHz / (71 + 1)）。 */
 extern TIM_HandleTypeDef htim3;
 
 #define LCD_DATA_PINS (LCD_D4_PIN | LCD_D5_PIN | LCD_D6_PIN | LCD_D7_PIN)
@@ -9,7 +9,8 @@ extern TIM_HandleTypeDef htim3;
 #define LCD_CMD_CLEAR 0x01U
 #define LCD_CMD_HOME 0x02U
 #define LCD_CMD_ENTRY 0x06U
-#define LCD_CMD_DISPLAY 0x0CU
+#define LCD_CMD_DISPLAY 0x0CU         /* 开显示，关光标           */
+#define LCD_CMD_DISPLAY_CURSOR 0x0EU  /* 开显示，开光标，不闪烁   */
 #define LCD_CMD_FUNC 0x28U
 #define LCD_CMD_OFF 0x08U
 #define LCD_CMD_LINE1 0x80U
@@ -84,7 +85,7 @@ void screen_init(void)
 
   HAL_Delay(50U);
 
-  /* Wake-up sequence: force 8-bit mode three times, then switch to 4-bit. */
+  /* 唤醒序列：先强行三次 8 位模式，再切到 4 位模式。 */
   lcd_write_nibble(0x03U);
   HAL_Delay(5U);
   lcd_write_nibble(0x03U);
@@ -111,4 +112,23 @@ void screen_write_lines(const char *line1, const char *line2)
   lcd_write_line(line1);
   lcd_write_command(LCD_CMD_LINE2);
   lcd_write_line(line2);
+}
+
+void screen_write_frame(const char *line1, const char *line2,
+                        uint8_t cursor_enabled, uint8_t cursor_row,
+                        uint8_t cursor_column)
+{
+  uint8_t address = (cursor_row != 0U) ? LCD_CMD_LINE2 : LCD_CMD_LINE1;
+
+  screen_write_lines(line1, line2);
+
+  if (cursor_enabled != 0U)
+  {
+    lcd_write_command((uint8_t)(address + (cursor_column & 0x0FU)));
+    lcd_write_command(LCD_CMD_DISPLAY_CURSOR);
+  }
+  else
+  {
+    lcd_write_command(LCD_CMD_DISPLAY);
+  }
 }

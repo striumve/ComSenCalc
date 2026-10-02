@@ -2,46 +2,44 @@
 #include "main.h"
 
 /* ---------------------------------------------------------------------------
- * TTP229-BSF x2, 2-wire serial interface.
+ * 两片 TTP229-BSF，二线串行接口。
  *
- * Protocol facts (from the TONTEK datasheet and the reference Arduino driver):
- *   - SCL is a clock *input* on the chip: the MCU drives it, and it idles HIGH.
- *   - SDO is the chip's data *output*, and it is ACTIVE LOW (low == touched).
- *   - A frame is 16 bits, LSB first: the first bit clocked out is channel TP0.
- *   - SDO also acts as a data-valid (DV) line: it rests HIGH and pulses LOW
- *     when a detection frame is ready.
- *   - Clock is a ~2 us low pulse followed by a ~2 us high pulse (~500 kHz).
- *   - After a frame the chip needs a short recovery time (Tout) before the
- *     next frame can be read; reading every 10 ms satisfies this.
+ * 协议（与参考实现 libttp229.a 完全一致）：
+ *   - SCL 在芯片上是时钟输入，由 MCU 驱动，空闲时为高电平。
+ *   - SDO 是芯片的数据输出，低电平有效：为低表示该通道被触摸。
+ *   - 每帧 16 位，低位在先（第一个时钟移出的是通道 0）。
+ *   - 每一位：SCL 拉低，等约 4us，采样 SDO，SCL 拉高，再等约 4us。
+ *     即约 125kHz 的时钟。
+ *   - 没有 data-valid 握手。芯片只要被时钟打就会给出当前按键状态，
+ *     所以主机随时都可以读。
  *
- * Both chips share GPIOB, so all four pins are configured here rather than
- * relying on the CubeMX-generated settings (which use LOW output speed and
- * would be lost on the next code generation anyway).
+ * 每片芯片的 16 个通道并不是按顺序对应按键的，PCB 走线是交错布线的。
+ * 下面两张查找表来自参考实现的 .rodata（a_channel_to_key / b_channel_to_key）。
+ * 0xFF 表示该通道没有接按键。
+ *
+ * 四个引脚都在 GPIOB 上，所以传输直接操作 BSRR/IDR。微秒延时用 Cortex-M3
+ * 的 DWT 周期计数器而不是 TIM3，因为 TIM3 与 screen.c 共用且不可重入。
  * ------------------------------------------------------------------------- */
 
-#define TTP_SCL1_PIN GPIO_PIN_6 /* PB6 */
-#define TTP_SDO1_PIN GPIO_PIN_7 /* PB7 */
-#define TTP_SCL2_PIN GPIO_PIN_8 /* PB8 */
-#define TTP_SDO2_PIN GPIO_PIN_9 /* PB9 */
+#define TTP_SCL_A_MASK GPIO_PIN_6 /* PB6 */
+#define TTP_SDO_A_MASK GPIO_PIN_7 /* PB7 */
+#define TTP_SCL_B_MASK GPIO_PIN_8 /* PB8 */
+#define TTP_SDO_B_MASK GPIO_PIN_9 /* PB9 */
 
 #define TTP_PORT GPIOB
 
-#define TTP_FRAME_BITS    16U
-#define TTP_KEYS_PER_CHIP 15U
-#define TTP_CHIP_MASK     0x7FFFU /* bits 0..14 valid, bit 15 unused */
+#define TTP_FRAME_BITS 16U
+#define TTP_HALF_PERIOD_US 4U
 
-/* Set to 1 to gate each frame on the SDO data-valid pulse. Leave at 0 while
- * polling on a fixed schedule: the DV pulse repeats only at the chip's
- * sampling rate, so polling would miss it most of the time. */
-#define TTP_USE_DV_GATE 0
+static const uint8_t a_channel_to_key[TTP_FRAME_BITS] = {
+    7U, 11U, 6U, 1U, 0U, 5U, 10U, 2U, 0xFFU, 14U, 9U, 4U, 3U, 8U, 13U, 12U
+};
 
-#if TTP_USE_DV_GATE
-#define TTP_DV_TIMEOUT_LOOPS 5000U
-#endif
+static const uint8_t b_channel_to_key[TTP_FRAME_BITS] = {
+    27U, 15U, 20U, 25U, 16U, 21U, 26U, 17U, 22U, 28U, 23U, 18U, 29U, 24U, 19U, 0xFFU
+};
 
-/* --- microsecond delay ---------------------------------------------------
- * Uses the Cortex-M3 DWT cycle counter. TIM3 is already reserved by screen.c
- * and is not reentrant, so it must not be shared between tasks. */
+/* --- 微秒级延时 ----------------------------------------------------------- */
 static void keypad_dwt_init(void)
 {
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
@@ -63,67 +61,48 @@ static void keypad_gpio_init(void)
 {
   GPIO_InitTypeDef gpio = {0};
 
-  /* SCL lines: push-pull outputs, idle high. Medium speed keeps the ~500 kHz
-   * edges clean; CubeMX generates LOW speed, which is marginal here. */
-  HAL_GPIO_WritePin(TTP_PORT, TTP_SCL1_PIN | TTP_SCL2_PIN, GPIO_PIN_SET);
-  gpio.Pin = TTP_SCL1_PIN | TTP_SCL2_PIN;
+  /* SCL 线：推挽输出，空闲为高。 */
+  HAL_GPIO_WritePin(TTP_PORT, TTP_SCL_A_MASK | TTP_SCL_B_MASK, GPIO_PIN_SET);
+  gpio.Pin = TTP_SCL_A_MASK | TTP_SCL_B_MASK;
   gpio.Mode = GPIO_MODE_OUTPUT_PP;
   gpio.Pull = GPIO_NOPULL;
   gpio.Speed = GPIO_SPEED_FREQ_MEDIUM;
   HAL_GPIO_Init(TTP_PORT, &gpio);
 
-  /* SDO lines: driven by the TTP229 (push-pull), so no pull resistor. */
-  gpio.Pin = TTP_SDO1_PIN | TTP_SDO2_PIN;
+  /* SDO 线：由芯片驱动。打开内部上拉，这样线没接上时会读成"未按下"
+   * 而不是悬空乱跳。 */
+  gpio.Pin = TTP_SDO_A_MASK | TTP_SDO_B_MASK;
   gpio.Mode = GPIO_MODE_INPUT;
-  gpio.Pull = GPIO_NOPULL;
+  gpio.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(TTP_PORT, &gpio);
 }
 
-static uint16_t ttp229_read_frame(uint16_t sclPin, uint16_t sdoPin)
+static uint16_t ttp229_read_chip_speed(uint16_t scl_mask, uint16_t sdo_mask,
+                                       uint16_t half_us)
 {
-  uint16_t frame = 0U;
+  uint16_t value = 0U;
   uint8_t i;
 
-#if TTP_USE_DV_GATE
-  uint32_t guard = TTP_DV_TIMEOUT_LOOPS;
-
-  /* SDO rests high; the chip pulses it low when a frame is available. */
-  while (HAL_GPIO_ReadPin(TTP_PORT, sdoPin) != GPIO_PIN_RESET)
-  {
-    if (--guard == 0U)
-    {
-      return 0U;
-    }
-  }
-
-  guard = TTP_DV_TIMEOUT_LOOPS;
-  while (HAL_GPIO_ReadPin(TTP_PORT, sdoPin) != GPIO_PIN_SET)
-  {
-    if (--guard == 0U)
-    {
-      return 0U;
-    }
-  }
-
-  keypad_delay_us(10U); /* Tw */
-#endif
-
-  /* 16 bits, LSB first, sampled while SCL is low. SDO low means touched. */
   for (i = 0U; i < TTP_FRAME_BITS; i++)
   {
-    HAL_GPIO_WritePin(TTP_PORT, sclPin, GPIO_PIN_RESET);
-    keypad_delay_us(2U);
+    TTP_PORT->BSRR = (uint32_t)scl_mask << 16; /* SCL 拉低 */
+    keypad_delay_us(half_us);
 
-    if (HAL_GPIO_ReadPin(TTP_PORT, sdoPin) == GPIO_PIN_RESET)
+    if ((TTP_PORT->IDR & sdo_mask) == 0U) /* 低电平有效 */
     {
-      frame |= (uint16_t)(1U << i);
+      value |= (uint16_t)(1U << i);
     }
 
-    HAL_GPIO_WritePin(TTP_PORT, sclPin, GPIO_PIN_SET);
-    keypad_delay_us(2U);
+    TTP_PORT->BSRR = scl_mask; /* SCL 拉高 */
+    keypad_delay_us(half_us);
   }
 
-  return frame;
+  return value;
+}
+
+static uint16_t ttp229_read_chip(uint16_t scl_mask, uint16_t sdo_mask)
+{
+  return ttp229_read_chip_speed(scl_mask, sdo_mask, TTP_HALF_PERIOD_US);
 }
 
 void keypad_init(void)
@@ -134,24 +113,32 @@ void keypad_init(void)
 
 uint32_t touch_raw_read(void)
 {
-  uint32_t chip1 = (uint32_t)ttp229_read_frame(TTP_SCL1_PIN, TTP_SDO1_PIN);
-  uint32_t chip2 = (uint32_t)ttp229_read_frame(TTP_SCL2_PIN, TTP_SDO2_PIN);
+  uint16_t chip_a = ttp229_read_chip(TTP_SCL_A_MASK, TTP_SDO_A_MASK);
+  uint16_t chip_b = ttp229_read_chip(TTP_SCL_B_MASK, TTP_SDO_B_MASK);
+  uint32_t keys = 0U;
+  uint8_t channel;
 
-  /* chip #1 -> global keys 0..14, chip #2 -> global keys 15..29 */
-  return (chip1 & TTP_CHIP_MASK) | ((chip2 & TTP_CHIP_MASK) << TTP_KEYS_PER_CHIP);
-}
+  for (channel = 0U; channel < TTP_FRAME_BITS; channel++)
+  {
+    if (((chip_a >> channel) & 1U) != 0U)
+    {
+      uint8_t key = a_channel_to_key[channel];
+      if (key < KEYPAD_KEY_COUNT)
+      {
+        keys |= (1UL << key);
+      }
+    }
+    if (((chip_b >> channel) & 1U) != 0U)
+    {
+      uint8_t key = b_channel_to_key[channel];
+      if (key < KEYPAD_KEY_COUNT)
+      {
+        keys |= (1UL << key);
+      }
+    }
+  }
 
-uint16_t keypad_debug_frame(uint8_t chip)
-{
-  if (chip == 1U)
-  {
-    return ttp229_read_frame(TTP_SCL1_PIN, TTP_SDO1_PIN);
-  }
-  if (chip == 2U)
-  {
-    return ttp229_read_frame(TTP_SCL2_PIN, TTP_SDO2_PIN);
-  }
-  return 0U;
+  return keys;
 }
 
 uint8_t keypad_first_key(uint32_t bitmap)
@@ -166,4 +153,118 @@ uint8_t keypad_first_key(uint32_t bitmap)
     }
   }
   return 0xFFU;
+}
+
+/* ---------------------------------------------------------------------------
+ * 仅用于台面调试的接线检查，应用程序不使用
+ * ------------------------------------------------------------------------ */
+uint16_t keypad_debug_raw(uint8_t chip)
+{
+  return keypad_debug_raw_speed(chip, TTP_HALF_PERIOD_US);
+}
+
+uint16_t keypad_debug_raw_speed(uint8_t chip, uint16_t half_us)
+{
+  if (chip == 1U)
+  {
+    return ttp229_read_chip_speed(TTP_SCL_A_MASK, TTP_SDO_A_MASK, half_us);
+  }
+  if (chip == 2U)
+  {
+    return ttp229_read_chip_speed(TTP_SCL_B_MASK, TTP_SDO_B_MASK, half_us);
+  }
+  return 0U;
+}
+
+char keypad_debug_pin_state(uint8_t index)
+{
+  static const uint16_t pins[4] = {TTP_SCL_A_MASK, TTP_SDO_A_MASK,
+                                   TTP_SCL_B_MASK, TTP_SDO_B_MASK};
+  GPIO_InitTypeDef gpio = {0};
+  GPIO_PinState withPullUp;
+  GPIO_PinState withPullDown;
+  uint16_t pin;
+
+  if (index >= 4U)
+  {
+    return '?';
+  }
+  pin = pins[index];
+
+  gpio.Pin = pin;
+  gpio.Mode = GPIO_MODE_INPUT;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+
+  gpio.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(TTP_PORT, &gpio);
+  HAL_Delay(2U);
+  withPullUp = HAL_GPIO_ReadPin(TTP_PORT, pin);
+
+  gpio.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(TTP_PORT, &gpio);
+  HAL_Delay(2U);
+  withPullDown = HAL_GPIO_ReadPin(TTP_PORT, pin);
+
+  if ((withPullUp == GPIO_PIN_SET) && (withPullDown == GPIO_PIN_RESET))
+  {
+    return 'Z'; /* 跟着内部上下拉走 -> 没有东西在驱动它 */
+  }
+  if ((withPullUp == GPIO_PIN_RESET) && (withPullDown == GPIO_PIN_RESET))
+  {
+    return 'L'; /* 无论怎么拉都是低 */
+  }
+  if ((withPullUp == GPIO_PIN_SET) && (withPullDown == GPIO_PIN_SET))
+  {
+    return 'H'; /* 无论怎么拉都是高 */
+  }
+  return '?';
+}
+
+char keypad_debug_short_test(uint8_t chip)
+{
+  GPIO_InitTypeDef gpio = {0};
+  GPIO_PinState whenSclHigh;
+  GPIO_PinState whenSclLow;
+  uint16_t sclPin;
+  uint16_t sdoPin;
+
+  if (chip == 1U)
+  {
+    sclPin = TTP_SCL_A_MASK;
+    sdoPin = TTP_SDO_A_MASK;
+  }
+  else if (chip == 2U)
+  {
+    sclPin = TTP_SCL_B_MASK;
+    sdoPin = TTP_SDO_B_MASK;
+  }
+  else
+  {
+    return '?';
+  }
+
+  gpio.Pin = sclPin;
+  gpio.Mode = GPIO_MODE_OUTPUT_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(TTP_PORT, &gpio);
+
+  gpio.Pin = sdoPin;
+  gpio.Mode = GPIO_MODE_INPUT;
+  gpio.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(TTP_PORT, &gpio);
+
+  HAL_GPIO_WritePin(TTP_PORT, sclPin, GPIO_PIN_SET);
+  HAL_Delay(1U);
+  whenSclHigh = HAL_GPIO_ReadPin(TTP_PORT, sdoPin);
+
+  HAL_GPIO_WritePin(TTP_PORT, sclPin, GPIO_PIN_RESET);
+  HAL_Delay(1U);
+  whenSclLow = HAL_GPIO_ReadPin(TTP_PORT, sdoPin);
+
+  if ((whenSclHigh == GPIO_PIN_SET) && (whenSclLow == GPIO_PIN_RESET))
+  {
+    return 'S'; /* SDO 跟着 SCL 变 -> 两条线短接在一起 */
+  }
+  return 'O';
 }
