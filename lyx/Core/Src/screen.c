@@ -15,6 +15,21 @@ extern TIM_HandleTypeDef htim3;
 #define LCD_CMD_OFF 0x08U
 #define LCD_CMD_LINE1 0x80U
 #define LCD_CMD_LINE2 0xC0U
+#define LCD_CMD_CGRAM 0x40U           /* 设置 CGRAM 地址          */
+
+/* 自定义字形 */
+#define LCD_CUSTOM_COUNT 4U
+
+static const uint8_t lcd_custom_chars[LCD_CUSTOM_COUNT][8] = {
+    /* 0x01: π */
+    {0x00U, 0x00U, 0x1FU, 0x0AU, 0x0AU, 0x0AU, 0x0AU, 0x00U},
+    /* 0x02: × */
+    {0x00U, 0x00U, 0x11U, 0x0AU, 0x04U, 0x0AU, 0x11U, 0x00U},
+    /* 0x03: ÷ */
+    {0x00U, 0x04U, 0x00U, 0x1FU, 0x00U, 0x04U, 0x00U, 0x00U},
+    /* 0x04: √ */
+    {0x00U, 0x07U, 0x04U, 0x04U, 0x04U, 0x14U, 0x18U, 0x08U},
+};
 
 static void lcd_delay_us(uint16_t us)
 {
@@ -99,6 +114,29 @@ void screen_init(void)
   lcd_write_command(LCD_CMD_CLEAR);
   lcd_write_command(LCD_CMD_ENTRY);
   lcd_write_command(LCD_CMD_DISPLAY);
+
+  screen_load_custom_chars();
+}
+
+void screen_load_custom_chars(void)
+{
+  uint8_t index;
+  uint8_t row;
+
+  for (index = 0U; index < LCD_CUSTOM_COUNT; index++)
+  {
+    /* 字符码 = index + 1（跳过 0x00），CGRAM 地址 = 码 << 3 */
+    uint8_t code = (uint8_t)(index + 1U);
+
+    lcd_write_command((uint8_t)(LCD_CMD_CGRAM | ((uint8_t)(code << 3))));
+    for (row = 0U; row < 8U; row++)
+    {
+      lcd_write_char((char)(lcd_custom_chars[index][row] & 0x1FU));
+    }
+  }
+
+  /* 指针必须回到 DDRAM，否则后面的显示内容会被写进 CGRAM。 */
+  lcd_write_command(LCD_CMD_LINE1);
 }
 
 void screen_clear(void)

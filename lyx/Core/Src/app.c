@@ -394,6 +394,93 @@ static void format_complex(char *dst, uint8_t size, calc_complex_t value)
     format_number(dst, size, value.real);
 }
 
+/* 把编辑缓冲区渲染成 LCD 实际显示的字符序列。
+ *
+ * 部分符号换成 CGRAM 自定义字形。"sqrt" 是 4 个字符、渲染成 √ 只有 1 个，
+ * 所以渲染后的长度可能比缓冲区短 —— 光标位置必须跟着换算，否则光标会
+ * 指到错误的地方。返回渲染后的长度，光标下标写入 *cursor_out。 */
+static uint8_t render_expression(char *dst, uint8_t dst_size, uint8_t *cursor_out)
+{
+    uint8_t in = 0U;
+    uint8_t out = 0U;
+
+    *cursor_out = 0U;
+
+    while ((in < s_len) && (out < (uint8_t)(dst_size - 1U)))
+    {
+        if (in == s_cursor)
+        {
+            *cursor_out = out;
+        }
+
+        if (((uint8_t)(s_len - in) >= 4U) &&
+            (strncmp(&s_expr[in], "sqrt", 4) == 0))
+        {
+            dst[out] = (char)LCD_CHAR_SQRT;
+            out++;
+            in += 4U;
+            continue;
+        }
+
+        switch (s_expr[in])
+        {
+            case '*': dst[out] = (char)LCD_CHAR_MUL; break;
+            case '/': dst[out] = (char)LCD_CHAR_DIV; break;
+            case 'p': dst[out] = (char)LCD_CHAR_PI; break;
+            /* 乘方直接显示 ASCII 的 '^'，不用自定义字形 */
+            default:  dst[out] = s_expr[in]; break;
+        }
+        out++;
+        in++;
+    }
+
+    /* 光标在末尾时不会命中循环里的判断，这里补上。 */
+    if (in == s_cursor)
+    {
+        *cursor_out = out;
+    }
+
+    dst[out] = '\0';
+    return out;
+}
+
+/* 把表达式渲染并开窗到 LCD 第 1 行，返回光标所在的列。
+ *
+ * first_col 是表达式起始列，前面的列留给调用者自己填（解方程模式用它放
+ * "a="/"b="/"c=" 提示）。这些列不会被本函数覆盖。 */
+static uint8_t build_expression_line(char *line, uint8_t first_col)
+{
+    char rendered[APP_EXPR_MAX + 1U];
+    uint8_t rendered_len;
+    uint8_t cursor;
+    uint8_t cols;
+    uint8_t start;
+    uint8_t i;
+
+    rendered_len = render_expression(rendered, (uint8_t)sizeof(rendered), &cursor);
+
+    cols = (uint8_t)(APP_LCD_COLS - first_col);
+
+    /* 窗口滚动：让光标落在剩余列之内 */
+    start = (cursor > (uint8_t)(cols - 1U)) ? (uint8_t)(cursor - (cols - 1U)) : 0U;
+
+    for (i = first_col; i < APP_LCD_COLS; i++)
+    {
+        line[i] = ' ';
+    }
+    for (i = 0U; i < cols; i++)
+    {
+        uint8_t index = (uint8_t)(start + i);
+        if (index < rendered_len)
+        {
+            line[(uint8_t)(first_col + i)] = rendered[index];
+        }
+    }
+    line[APP_LCD_COLS] = '\0';
+
+    return (uint8_t)(first_col + cursor - start);
+}
+
 /* 把文本右对齐铺进 16 列；比屏幕宽时保留前面的字符。 */
 static void align_right(char *dst, const char *text)
 {
@@ -490,20 +577,11 @@ static void solve_reset(void)
 static void publish_status(void)
 {
     display_msg_t msg;
-    uint8_t start;
-    uint8_t i;
+    uint8_t cursor_column;
 
     memset(&msg, 0, sizeof(msg));
 
-    /* 让光标始终落在 16 列的窗口内。 */
-    start = (s_cursor > (APP_LCD_COLS - 1U)) ? (uint8_t)(s_cursor - (APP_LCD_COLS - 1U)) : 0U;
-
-    for (i = 0U; i < APP_LCD_COLS; i++)
-    {
-        uint8_t index = (uint8_t)(start + i);
-        msg.line1[i] = (index < s_len) ? s_expr[index] : ' ';
-    }
-    msg.line1[APP_LCD_COLS] = '\0';
+    cursor_column = build_expression_line(msg.line1, 0U);
 
     snprintf(msg.line2, sizeof(msg.line2), "Calc Ready%s%s",
              (s_shift != 0U) ? " S" : "",
@@ -511,7 +589,7 @@ static void publish_status(void)
 
     msg.cursor_enabled = 1U;
     msg.cursor_row = 0U;
-    msg.cursor_column = (uint8_t)(s_cursor - start);
+    msg.cursor_column = cursor_column;
 
     (void)osMessageQueuePut(s_display_queue, &msg, 0U, 0U);
 }
@@ -519,19 +597,10 @@ static void publish_status(void)
 static void publish_result(const char *result_text)
 {
     display_msg_t msg;
-    uint8_t start;
-    uint8_t i;
 
     memset(&msg, 0, sizeof(msg));
 
-    start = (s_cursor > (APP_LCD_COLS - 1U)) ? (uint8_t)(s_cursor - (APP_LCD_COLS - 1U)) : 0U;
-    for (i = 0U; i < APP_LCD_COLS; i++)
-    {
-        uint8_t index = (uint8_t)(start + i);
-        msg.line1[i] = (index < s_len) ? s_expr[index] : ' ';
-    }
-    msg.line1[APP_LCD_COLS] = '\0';
-
+    (void)build_expression_line(msg.line1, 0U);
     align_right(msg.line2, result_text); /* 答案右对齐 */
     msg.cursor_enabled = 0U;
 
@@ -543,7 +612,6 @@ static void publish_result(const char *result_text)
 static void publish_solve(void)
 {
     display_msg_t msg;
-    uint8_t start;
     uint8_t i;
 
     memset(&msg, 0, sizeof(msg));
@@ -556,15 +624,10 @@ static void publish_solve(void)
     }
     else
     {
-        start = (s_cursor > (APP_LCD_COLS - 1U))
-                    ? (uint8_t)(s_cursor - (APP_LCD_COLS - 1U))
-                    : 0U;
-        for (i = 0U; i < APP_LCD_COLS; i++)
-        {
-            uint8_t index = (uint8_t)(start + i);
-            msg.line1[i] = (index < s_len) ? s_expr[index] : ' ';
-        }
-        msg.line1[APP_LCD_COLS] = '\0';
+        /* 提示当前在输入哪个系数：a= / b= / c= */
+        msg.line1[0] = (char)('a' + s_solve_step);
+        msg.line1[1] = '=';
+        msg.cursor_column = build_expression_line(msg.line1, 2U);
         for (i = 0U; i < APP_LCD_COLS; i++)
         {
             msg.line2[i] = ' ';
@@ -573,7 +636,6 @@ static void publish_solve(void)
 
         msg.cursor_enabled = 1U;
         msg.cursor_row = 0U;
-        msg.cursor_column = (uint8_t)(s_cursor - start);
     }
 
     (void)osMessageQueuePut(s_display_queue, &msg, 0U, 0U);
