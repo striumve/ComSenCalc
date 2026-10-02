@@ -583,9 +583,26 @@ static void publish_status(void)
 
     cursor_column = build_expression_line(msg.line1, 0U);
 
-    snprintf(msg.line2, sizeof(msg.line2), "Calc Ready%s%s",
-             (s_shift != 0U) ? " S" : "",
-             (s_allow_complex != 0U) ? " C" : "");
+    /* 第二行状态：先显示复数标志 C，再显示 Shift 指示（上箭头自定义字形）。 */
+    {
+        uint8_t pos = 0U;
+
+        memcpy(msg.line2, "Calc Ready", 10U);
+        pos = 10U;
+        if (s_allow_complex != 0U)
+        {
+            msg.line2[pos] = ' ';
+            msg.line2[pos + 1U] = 'C';
+            pos += 2U;
+        }
+        if (s_shift != 0U)
+        {
+            msg.line2[pos] = ' ';
+            msg.line2[pos + 1U] = (char)LCD_CHAR_UP;
+            pos += 2U;
+        }
+        msg.line2[pos] = '\0';
+    }
 
     msg.cursor_enabled = 1U;
     msg.cursor_row = 0U;
@@ -607,12 +624,11 @@ static void publish_result(const char *result_text)
     (void)osMessageQueuePut(s_display_queue, &msg, 0U, 0U);
 }
 
-/* 解方程模式的显示：输入阶段第一行显示正在输入的内容、第二行留空；
- * 出结果时第一行 x1、第二行 x2。 */
+/* 解方程模式的显示：输入阶段第一行是 "a="/"b="/"c=" 加正在输入的内容，
+ * 第二行提示处于解方程模式；出结果时第一行 x1、第二行 x2。 */
 static void publish_solve(void)
 {
     display_msg_t msg;
-    uint8_t i;
 
     memset(&msg, 0, sizeof(msg));
 
@@ -628,11 +644,10 @@ static void publish_solve(void)
         msg.line1[0] = (char)('a' + s_solve_step);
         msg.line1[1] = '=';
         msg.cursor_column = build_expression_line(msg.line1, 2U);
-        for (i = 0U; i < APP_LCD_COLS; i++)
-        {
-            msg.line2[i] = ' ';
-        }
-        msg.line2[APP_LCD_COLS] = '\0';
+
+        /* 第二行提示处于解方程模式 */
+        memcpy(msg.line2, "Solve mode", 10U);
+        msg.line2[10] = '\0';
 
         msg.cursor_enabled = 1U;
         msg.cursor_row = 0U;

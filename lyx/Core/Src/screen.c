@@ -18,7 +18,7 @@ extern TIM_HandleTypeDef htim3;
 #define LCD_CMD_CGRAM 0x40U           /* 设置 CGRAM 地址          */
 
 /* 自定义字形 */
-#define LCD_CUSTOM_COUNT 4U
+#define LCD_CUSTOM_COUNT 5U
 
 static const uint8_t lcd_custom_chars[LCD_CUSTOM_COUNT][8] = {
     /* 0x01: π */
@@ -29,6 +29,8 @@ static const uint8_t lcd_custom_chars[LCD_CUSTOM_COUNT][8] = {
     {0x00U, 0x04U, 0x00U, 0x1FU, 0x00U, 0x04U, 0x00U, 0x00U},
     /* 0x04: √ */
     {0x00U, 0x07U, 0x04U, 0x04U, 0x04U, 0x14U, 0x18U, 0x08U},
+    /* 0x05: ↑（Shift 指示） */
+    {0x04U, 0x0EU, 0x15U, 0x04U, 0x04U, 0x04U, 0x04U, 0x00U},
 };
 
 static void lcd_delay_us(uint16_t us)

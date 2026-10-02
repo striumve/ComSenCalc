@@ -24,6 +24,7 @@
 #define LCD_CHAR_MUL    0x02U /* × */
 #define LCD_CHAR_DIV    0x03U /* ÷ */
 #define LCD_CHAR_SQRT   0x04U /* √ */
+#define LCD_CHAR_UP     0x05U /* ↑，用作 Shift 指示 */
 
 void screen_init(void);
 void screen_clear(void);

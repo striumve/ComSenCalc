@@ -581,7 +581,7 @@ calc_status_t calculator_evaluate(const char *expression,
         return CALC_SYNTAX;
     }
 
-    /* 不允许复数时，结果必须是实数。 */
+    /* 不允许复数时，结果必须是实数 */
     if ((allow_complex == 0U) && (value.imag != 0.0f))
     {
         return CALC_DOMAIN;
@@ -623,7 +623,7 @@ calc_status_t calculator_solve_quadratic(float a, float b, float c,
 
     if (a == 0.0f)
     {
-        /* 二次项系数为 0：退化成一次方程，两个根相同。 */
+        /* 二次项系数为0：退化成一次方程，两个根相同。 */
         float x = 0.0f;
         calc_status_t st = calculator_solve_linear(b, c, &x);
 
@@ -644,8 +644,7 @@ calc_status_t calculator_solve_quadratic(float a, float b, float c,
         float r_plus = (-b + sd) / (2.0f * a);
         float r_minus = (-b - sd) / (2.0f * a);
 
-        /* 让 x1 恒定是较大的那个根。否则 (-b+sqrt(D))/(2a) 在 a<0 时反而是
-         * 较小的根，顺序会随 a 的符号变化，不好用。 */
+        /* 让x1恒定是较大的那个根 */
         if (r_plus >= r_minus)
         {
             *x1 = cx(r_plus, 0.0f);
@@ -663,7 +662,7 @@ calc_status_t calculator_solve_quadratic(float a, float b, float c,
         float re = -b / (2.0f * a);
         float im = sd / (2.0f * a);
 
-        /* a 为负时上面算出的虚部是负的，统一让 x1 带正虚部。 */
+        /* a为负时上面算出的虚部是负的，统一让x1带正虚部。 */
         if (im < 0.0f)
         {
             im = -im;
