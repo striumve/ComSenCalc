@@ -54,7 +54,11 @@ typedef StaticTask_t osStaticThreadDef_t;
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
-uint32_t defaultTaskBuffer[128];
+/* 512 -> 1024 字节：这个任务现在要周期跑 usb_poll()，里面会调
+ * osMessageQueuePut()（CMSIS-RTOS2 包装层 + FreeRTOS 队列代码用栈不小），
+ * 512 字节太紧，栈溢出会静默破坏相邻内存。
+ * 注意：CubeMX 重新生成代码时这行会被改回 128。 */
+uint32_t defaultTaskBuffer[256];
 osStaticThreadDef_t defaultTaskControlBlock;
 const osThreadAttr_t defaultTask_attributes = {
     .name = "defaultTask",

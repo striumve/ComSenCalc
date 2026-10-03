@@ -657,6 +657,181 @@ static void publish_solve(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * USB 串口终端
+ *
+ * CDC_Receive_FS() 运行在 USB 中断上下文里，那里不能调用可能阻塞的
+ * CMSIS-RTOS2 队列接口，所以用一个单生产者（中断）/ 单消费者（任务）的
+ * 环形缓冲区把数据交给任务处理。
+ *
+ * 主页按 Shift + 0 进入，整屏变成 16x2 终端；再按一次退出。
+ * ------------------------------------------------------------------------ */
+#define USB_RX_RING_SIZE 128U
+#define USB_POLL_PERIOD_MS 10U
+#define USB_TERM_ROWS 2U
+
+static volatile uint8_t s_usb_rx[USB_RX_RING_SIZE];
+static volatile uint16_t s_usb_rx_head;
+static volatile uint16_t s_usb_rx_tail;
+
+static char s_usb_term[USB_TERM_ROWS][APP_LCD_COLS + 1U];
+static uint8_t s_usb_row;
+static uint8_t s_usb_col;
+static uint8_t s_usb_mode;
+static uint8_t s_usb_dirty;
+
+/* 由 USB 中断调用，把收到的字节放进环形缓冲区。 */
+void app_usb_rx_push(const uint8_t *data, uint32_t len)
+{
+    uint32_t i;
+    uint16_t head = s_usb_rx_head;
+
+    for (i = 0U; i < len; i++)
+    {
+        uint16_t next = (uint16_t)((head + 1U) % USB_RX_RING_SIZE);
+
+        if (next == s_usb_rx_tail)
+        {
+            break; /* 满了，多余的字节丢掉 */
+        }
+        s_usb_rx[head] = data[i];
+        head = next;
+    }
+    s_usb_rx_head = head;
+}
+
+static uint8_t usb_rx_pop(uint8_t *ch)
+{
+    if (s_usb_rx_tail == s_usb_rx_head)
+    {
+        return 0U;
+    }
+    *ch = s_usb_rx[s_usb_rx_tail];
+    s_usb_rx_tail = (uint16_t)((s_usb_rx_tail + 1U) % USB_RX_RING_SIZE);
+    return 1U;
+}
+
+static void usb_term_clear(void)
+{
+    uint8_t row;
+    uint8_t col;
+
+    for (row = 0U; row < USB_TERM_ROWS; row++)
+    {
+        for (col = 0U; col < APP_LCD_COLS; col++)
+        {
+            s_usb_term[row][col] = ' ';
+        }
+        s_usb_term[row][APP_LCD_COLS] = '\0';
+    }
+    s_usb_row = 0U;
+    s_usb_col = 0U;
+}
+
+/* 整屏上滚一行。 */
+static void usb_term_scroll(void)
+{
+    uint8_t col;
+
+    for (col = 0U; col < APP_LCD_COLS; col++)
+    {
+        s_usb_term[0][col] = s_usb_term[1][col];
+        s_usb_term[1][col] = ' ';
+    }
+    s_usb_row = 1U;
+    s_usb_col = 0U;
+}
+
+static void usb_term_newline(void)
+{
+    if (s_usb_row == 0U)
+    {
+        s_usb_row = 1U;
+        s_usb_col = 0U;
+    }
+    else
+    {
+        usb_term_scroll();
+    }
+}
+
+static void usb_term_putc(char ch)
+{
+    if ((uint8_t)ch < 0x20U)
+    {
+        return; /* 控制字符忽略 */
+    }
+    s_usb_term[s_usb_row][s_usb_col] = ch;
+    s_usb_col++;
+    if (s_usb_col >= APP_LCD_COLS)
+    {
+        if (s_usb_row == 0U)
+        {
+            s_usb_row = 1U;
+            s_usb_col = 0U;
+        }
+        else
+        {
+            usb_term_scroll();
+        }
+    }
+}
+
+static void publish_usb_terminal(void)
+{
+    display_msg_t msg;
+
+    memset(&msg, 0, sizeof(msg));
+    memcpy(msg.line1, s_usb_term[0], APP_LCD_COLS + 1U);
+    memcpy(msg.line2, s_usb_term[1], APP_LCD_COLS + 1U);
+
+    msg.cursor_enabled = 1U;
+    msg.cursor_row = s_usb_row;
+    msg.cursor_column = (s_usb_col < APP_LCD_COLS) ? s_usb_col : (APP_LCD_COLS - 1U);
+
+    (void)osMessageQueuePut(s_display_queue, &msg, 0U, 0U);
+}
+
+static void usb_terminal_toggle(void)
+{
+    if (s_usb_mode == 0U)
+    {
+        usb_term_clear();
+        s_usb_mode = 1U;
+        s_usb_dirty = 0U;
+        publish_usb_terminal();
+    }
+    else
+    {
+        s_usb_mode = 0U;
+    }
+}
+
+/* 把环形缓冲区里的字节喂给终端。由 defaultTask 周期调用。 */
+static void usb_poll(void)
+{
+    uint8_t ch;
+
+    while (usb_rx_pop(&ch) != 0U)
+    {
+        if (ch == '\n')
+        {
+            usb_term_newline();
+        }
+        else if (ch != '\r')
+        {
+            usb_term_putc((char)ch);
+        }
+        s_usb_dirty = 1U;
+    }
+
+    if ((s_usb_mode != 0U) && (s_usb_dirty != 0U))
+    {
+        s_usb_dirty = 0U;
+        publish_usb_terminal();
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * 对外入口
  * ------------------------------------------------------------------------ */
 void app_init(void)
@@ -668,17 +843,33 @@ void app_init(void)
     s_angle = CALC_ANGLE_DEG;
     s_allow_complex = 0U;
     s_shift = 0U;
-    s_solve_mode = 0U;
+    s_solve_mode = 0U; 
+    s_usb_mode = 0U;
+    s_usb_dirty = 0U;
+    s_usb_rx_head = 0U;
+    s_usb_rx_tail = 0U;
+    usb_term_clear();
     solve_reset();
     expr_clear();
 }
 
 void app_heartbeat_task(void)
 {
+    uint16_t ticks = 0U;
+
     for (;;)
     {
-        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-        osDelay(HEARTBEAT_PERIOD_MS);
+        /* USB 串口接收必须在普通任务里处理（中断里只往环形缓冲区塞字节）。 */
+        usb_poll();
+
+        ticks++;
+        if (ticks >= (HEARTBEAT_PERIOD_MS / USB_POLL_PERIOD_MS))
+        {
+            ticks = 0U;
+            HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+        }
+
+        osDelay(USB_POLL_PERIOD_MS);
     }
 }
 
@@ -723,6 +914,27 @@ void app_controller_task(void)
     {
         if (osMessageQueueGet(s_key_queue, &key, NULL, osWaitForever) != osOK)
         {
+            continue;
+        }
+
+        /* ---- USB 串口终端模式 ---- */
+        if (s_usb_mode != 0U)
+        {
+            /* Shift + 0 退出，回到计算器主页。 */
+            if ((key == KEY_0) && (s_shift != 0U))
+            {
+                s_shift = 0U;
+                s_usb_mode = 0U;
+                publish_status();
+                continue;
+            }
+
+            /* 只认 Shift（用来凑出 Shift+0），其余按键忽略，免得在看不见的
+             * 地方改动了表达式。 */
+            if (key == KEY_SHIFT)
+            {
+                s_shift = (s_shift == 0U) ? 1U : 0U;
+            }
             continue;
         }
 
@@ -889,6 +1101,18 @@ void app_controller_task(void)
                     s_solve_mode = 1U;
                     solve_reset();
                     publish_solve();
+                    continue; /* 已经发过显示消息，跳过末尾的 publish */
+                }
+                expr_insert(key_primary[key]);
+                s_shift = 0U;
+                break;
+
+            /* 数字 0：Shift + 0 进入 USB 串口终端模式。 */
+            case KEY_0:
+                if (s_shift != 0U)
+                {
+                    s_shift = 0U;
+                    usb_terminal_toggle();
                     continue; /* 已经发过显示消息，跳过末尾的 publish */
                 }
                 expr_insert(key_primary[key]);

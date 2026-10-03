@@ -259,6 +259,12 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
+  /* 把收到的数据交给应用层的环形缓冲区。
+   * 本函数运行在 USB 中断上下文里，所以只做拷贝，不调用任何阻塞接口。 */
+  {
+    extern void app_usb_rx_push(const uint8_t *data, uint32_t len);
+    app_usb_rx_push(Buf, *Len);
+  }
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
   return (USBD_OK);

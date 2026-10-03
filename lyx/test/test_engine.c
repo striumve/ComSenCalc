@@ -92,6 +92,16 @@ int main(void)
   expect("s(p/2)", CALC_ANGLE_RAD, 0U, zero, CALC_OK, 1.0f, 0.0f); /* sin(pi/2) */
   ok("s90", 1.0f);
 
+  printf("--- 默认角度制是 DEG ---\n");
+  /* app.c 的 app_init() 里 s_angle = CALC_ANGLE_DEG，所以 s1 = sin(1度)。
+   * 角度制: sin(1°)   = 0.0174524
+   * 弧度制: sin(1 rad) = 0.8414710
+   * 两者差 48 倍，很容易看出来。 */
+  ok("s1", 0.0174524f);
+  expect("s1", CALC_ANGLE_RAD, 0U, zero, CALC_OK, 0.8414710f, 0.0f);
+  ok("c1", 0.9998477f);
+  ok("t1", 0.0174551f);
+
   printf("--- 非复数模式下，实表达式的虚部必须精确为 0 ---\n");
   /* ok() 用的就是 allow_complex=0，所以下面每个用例都在证明：
    * 纯实表达式不会被误判成 CALC_DOMAIN。
