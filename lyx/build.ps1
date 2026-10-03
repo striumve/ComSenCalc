@@ -1,17 +1,11 @@
 <#
-    build.ps1 -- build the firmware without CMake/Ninja.
-
-    The project is normally built with `cmake --preset Debug`, but CMake and
-    Ninja are not installed on this machine. This script calls arm-none-eabi-gcc
-    directly with the same flags, include paths and defines the CMake toolchain
-    file uses, so it produces the same output.
-
     Usage:
         pwsh -File build.ps1
         pwsh -File build.ps1 -Clean
 
     Output: build_manual/software.elf  .bin  .hex  .map
 #>
+
 param(
     [switch]$Clean,
     [string]$BuildDir = "build_manual",
@@ -39,7 +33,6 @@ foreach ($tool in @($GCC, $OBJCOPY, $SIZE)) {
 if ($Clean -and (Test-Path $out)) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $obj | Out-Null
 
-# --- include paths (mirrors MX_Include_Dirs) -------------------------------
 $includes = @(
     "Core/Inc"
     "USB_DEVICE/App"
@@ -55,15 +48,12 @@ $includes = @(
     "Drivers/CMSIS/Include"
 ) | ForEach-Object { "-I" + (Join-Path $root $_) }
 
-# --- C sources -------------------------------------------------------------
 $cSources = @()
 $cSources += Get-ChildItem (Join-Path $root "Core/Src") -Filter *.c | ForEach-Object { $_.FullName }
 $cSources += Get-ChildItem (Join-Path $root "USB_DEVICE") -Recurse -Filter *.c | ForEach-Object { $_.FullName }
 $cSources += Get-ChildItem (Join-Path $root "Drivers/STM32F1xx_HAL_Driver/Src") -Filter *.c | ForEach-Object { $_.FullName }
 $cSources += Get-ChildItem (Join-Path $root "Middlewares/ST/STM32_USB_Device_Library") -Recurse -Filter *.c | ForEach-Object { $_.FullName }
 
-# FreeRTOS: list explicitly -- the tree contains several ports and heap schemes
-# and only these ten belong to this project.
 $freertos = @(
     "croutine.c"
     "event_groups.c"
@@ -80,15 +70,12 @@ $cSources += $freertos
 
 $cSources = $cSources | Sort-Object -Unique
 
-# --- flags -----------------------------------------------------------------
 $commonFlags = @("-mcpu=cortex-m3", "-mthumb", "-Og", "-g3", "-Wall",
                  "-fdata-sections", "-ffunction-sections",
                  "-DUSE_HAL_DRIVER", "-DSTM32F103xB", "-DDEBUG")
 
-# --- compile ---------------------------------------------------------------
-# Native tools write warnings to stderr. With ErrorActionPreference = 'Stop'
-# PowerShell would turn those into a terminating error, so relax it here and
-# rely on $LASTEXITCODE instead.
+# compile
+
 $ErrorActionPreference = "Continue"
 
 $failed = @()
@@ -102,7 +89,6 @@ foreach ($src in $cSources) {
     if ($LASTEXITCODE -ne 0) { $failed += $rel }
 }
 
-# startup file is assembler-with-cpp
 $startupSrc = Join-Path $root "startup_stm32f103xb.s"
 $startupObj = Join-Path $obj "startup_stm32f103xb.o"
 Write-Host "  AS  startup_stm32f103xb.s"
@@ -116,7 +102,7 @@ if ($failed.Count -gt 0) {
     exit 1
 }
 
-# --- link ------------------------------------------------------------------
+# link
 $objects = Get-ChildItem $obj -Filter *.o | ForEach-Object { $_.FullName }
 
 $linkFlags = @("-mcpu=cortex-m3", "-mthumb",
@@ -126,10 +112,6 @@ $linkFlags = @("-mcpu=cortex-m3", "-mthumb",
                "-Wl,--gc-sections",
                "-Wl,--print-memory-usage")
 
-# libcalculator_engine.a was removed: the calculator engine now lives in
-# Core/Src/calculator_engine.c and is compiled like any other project source.
-# NOTE: keep this file ASCII-only - Windows PowerShell reads .ps1 as ANSI
-# and non-ASCII comments break the parser.
 $libs = @(
     (Join-Path $root "lib/libtouch_filter.a")
     (Join-Path $root "lib/libtouch_model.a")
@@ -141,7 +123,7 @@ Write-Host "  LD  software.elf"
 & $GCC @linkFlags @objects @libs -o $elf
 if ($LASTEXITCODE -ne 0) { Write-Host "LINK FAILED" -ForegroundColor Red; exit 1 }
 
-# --- artifacts -------------------------------------------------------------
+# artifacts
 & $OBJCOPY -O binary $elf $bin
 & $OBJCOPY -O ihex   $elf $hex
 
@@ -152,3 +134,4 @@ Write-Host "Built:" -ForegroundColor Green
 Write-Host "  $elf"
 Write-Host "  $bin"
 Write-Host "  $hex"
+

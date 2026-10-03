@@ -2,23 +2,7 @@
 #include "main.h"
 
 /* ---------------------------------------------------------------------------
- * 两片 TTP229-BSF，二线串行接口。
- *
- * 协议（与参考实现 libttp229.a 完全一致）：
- *   - SCL 在芯片上是时钟输入，由 MCU 驱动，空闲时为高电平。
- *   - SDO 是芯片的数据输出，低电平有效：为低表示该通道被触摸。
- *   - 每帧 16 位，低位在先（第一个时钟移出的是通道 0）。
- *   - 每一位：SCL 拉低，等约 4us，采样 SDO，SCL 拉高，再等约 4us。
- *     即约 125kHz 的时钟。
- *   - 没有 data-valid 握手。芯片只要被时钟打就会给出当前按键状态，
- *     所以主机随时都可以读。
- *
- * 每片芯片的 16 个通道并不是按顺序对应按键的，PCB 走线是交错布线的。
- * 下面两张查找表来自参考实现的 .rodata（a_channel_to_key / b_channel_to_key）。
- * 0xFF 表示该通道没有接按键。
- *
- * 四个引脚都在 GPIOB 上，所以传输直接操作 BSRR/IDR。微秒延时用 Cortex-M3
- * 的 DWT 周期计数器而不是 TIM3，因为 TIM3 与 screen.c 共用且不可重入。
+ * 两片TTP229-BSF
  * ------------------------------------------------------------------------- */
 
 #define TTP_SCL_A_MASK GPIO_PIN_6 /* PB6 */
@@ -61,7 +45,7 @@ static void keypad_gpio_init(void)
 {
   GPIO_InitTypeDef gpio = {0};
 
-  /* SCL 线：推挽输出，空闲为高。 */
+  /* SCL线：推挽输出，空闲为高 */
   HAL_GPIO_WritePin(TTP_PORT, TTP_SCL_A_MASK | TTP_SCL_B_MASK, GPIO_PIN_SET);
   gpio.Pin = TTP_SCL_A_MASK | TTP_SCL_B_MASK;
   gpio.Mode = GPIO_MODE_OUTPUT_PP;
@@ -69,8 +53,7 @@ static void keypad_gpio_init(void)
   gpio.Speed = GPIO_SPEED_FREQ_MEDIUM;
   HAL_GPIO_Init(TTP_PORT, &gpio);
 
-  /* SDO 线：由芯片驱动。打开内部上拉，这样线没接上时会读成"未按下"
-   * 而不是悬空乱跳。 */
+  /* SDO线 */
   gpio.Pin = TTP_SDO_A_MASK | TTP_SDO_B_MASK;
   gpio.Mode = GPIO_MODE_INPUT;
   gpio.Pull = GPIO_PULLUP;

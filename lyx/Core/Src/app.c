@@ -51,12 +51,7 @@ typedef struct
 } display_msg_t;
 
 /* ---------------------------------------------------------------------------
- * 静态存储。FreeRTOS 堆只有 1024 字节（见 FreeRTOSConfig.h），所以所有队列
- * 都用静态分配 —— 和线程的做法保持一致。
- *
- * 静态分配时 osMessageQueueNew() 需要同时提供控制块（cb_mem/cb_size）和
- * 存储区（mq_mem/mq_size）；只给存储区会返回 NULL，下一次调用就会撞上
- * configASSERT 而卡死。
+ * 静态存储
  * ------------------------------------------------------------------------ */
 static uint8_t s_key_queue_storage[KEY_QUEUE_LEN] __attribute__((aligned(4)));
 static StaticQueue_t s_key_queue_control;
@@ -92,15 +87,14 @@ static osMessageQueueId_t s_key_queue;
 static osMessageQueueId_t s_calc_queue;
 static osMessageQueueId_t s_display_queue;
 
-/* touch_model_t 约 900 字节，绝不能放在任务栈上。 */
+/* touch_model_t 约900字节，不能放在任务栈上。 */
 static touch_filter_t s_touch_filter;
 static touch_model_t s_touch_model;
 
-/* 上一次的运算结果，作为引擎的 answer 参数传入，这样第二功能的 FMT 键
- * （插入 'A'）就能复用它。 */
+/* 上一次的运算结果 */
 static calc_complex_t s_last_answer;
 
-/* 控制器状态。 */
+/* 控制器状态 */
 static char s_expr[APP_EXPR_MAX + 1U];
 static uint8_t s_len;
 static uint8_t s_cursor;
@@ -108,10 +102,7 @@ static uint8_t s_shift;
 static uint8_t s_allow_complex;
 static calc_angle_unit_t s_angle;
 
-/* 解二次方程模式。主页按 Shift + . 进入，再按一次退出。
- *
- * 流程：输入 a，EXE，输入 b，EXE，输入 c，EXE -> 第一行 x1、第二行 x2。
- * 每一步的输入都走完整的表达式求值，所以系数可以写成 1/3、q2 之类。 */
+/* 解二次方程模式 */
 static uint8_t s_solve_mode;               /* 0=计算器主页 1=解方程 */
 static uint8_t s_solve_step;               /* 已录入的系数个数 0..2 */
 static uint8_t s_solved;                   /* 1=正在显示结果 */
@@ -120,8 +111,7 @@ static char s_root1[APP_TEXT_MAX];
 static char s_root2[APP_TEXT_MAX];
 
 /* ---------------------------------------------------------------------------
- * 小的字符串 / 数字辅助函数。链接时用了 --specs=nano.specs，printf 不支持
- * 浮点，所以数字全部手工格式化。
+ * 小的字符串/数字辅助函数
  * ------------------------------------------------------------------------ */
 static void append_str(char *dst, uint8_t size, uint8_t *pos, const char *src)
 {
@@ -215,9 +205,7 @@ static void format_number(char *dst, uint8_t size, float value)
     }
     if (value < 0.0f)
     {
-        /* 小到 4 位小数都显示不出来时就当 0。
-         * 否则 cos(90) 这类结果是 -8.7e-8，会先打 '-' 再打 '0'，
-         * 屏幕上显示成难看的 "-0"。 */
+        /* 小到 4 位小数都显示不出来时就当 0 */
         if (value > -0.00005f)
         {
             value = 0.0f;
@@ -315,10 +303,7 @@ static void expr_backspace(void)
     s_expr[s_len] = '\0';
 }
 
-/* 把屏幕上显示的完整名字翻译成引擎认识的表达式写法。
- * 引擎只认单字母函数名（s=sin、c=cos、t=tan、l=log10、n=ln、q=sqrt），
- * 所以 "sin(" 要变成 "s("，括号保留：
- *     "sin(30)" -> "s(30)"，引擎读作 sin(30)。 */
+/* s=sin、c=cos、t=tan、l=log10、n=ln、q=sqrt */
 static void display_to_engine(const char *display, char *engine, uint8_t size)
 {
     uint8_t in = 0U;
@@ -397,7 +382,7 @@ static void format_complex(char *dst, uint8_t size, calc_complex_t value)
 /* 把编辑缓冲区渲染成 LCD 实际显示的字符序列。
  *
  * 部分符号换成 CGRAM 自定义字形。"sqrt" 是 4 个字符、渲染成 √ 只有 1 个，
- * 所以渲染后的长度可能比缓冲区短 —— 光标位置必须跟着换算，否则光标会
+ * 所以渲染后的长度可能比缓冲区短，光标位置必须跟着换算，否则光标会
  * 指到错误的地方。返回渲染后的长度，光标下标写入 *cursor_out。 */
 static uint8_t render_expression(char *dst, uint8_t dst_size, uint8_t *cursor_out)
 {
