@@ -40,4 +40,17 @@ calc_status_t calculator_solve_quadratic(float a, float b, float c,
                                          calc_complex_t *x1,
                                          calc_complex_t *x2);
 
+/* 定积分：用 Simpson 法在 [lower, upper] 上积分 expression。
+ *
+ * expression 是引擎语法，用 'x' 表示积分变量（"s(x)" 而不是 "sin(x)"）。
+ * 普通求值不允许出现 'x'，只有这里会打开它。
+ * intervals 会被向上取到偶数、且至少为 2。
+ * 若某一步求值失败、结果是复数、或出现 NaN/Inf，返回 CALC_DOMAIN。 */
+calc_status_t calculator_integrate(const char *expression,
+                                   calc_angle_unit_t angle_unit,
+                                   float lower,
+                                   float upper,
+                                   uint32_t intervals,
+                                   float *result);
+
 #endif

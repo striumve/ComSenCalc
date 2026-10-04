@@ -273,6 +273,67 @@ int main(void)
     if (st == CALC_DOMAIN) { g_pass++; } else { g_fail++; }
   }
 
+  printf("--- calculator_integrate（Simpson 法定积分）---\n");
+  {
+    calc_complex_t out;
+    calc_complex_t z;
+    float v;
+    calc_status_t st;
+
+    out.real = 0.0f;
+    out.imag = 0.0f;
+    z = out;
+    v = 0.0f;
+
+    /* ∫0^1 x dx = 0.5 */
+    st = calculator_integrate("x", CALC_ANGLE_RAD, 0.0f, 1.0f, 200U, &v);
+    printf("  ∫0^1 x dx        = %.6f %s\n", v,
+           ((st == CALC_OK) && (fabsf(v - 0.5f) < 1e-5f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(v - 0.5f) < 1e-5f)) { g_pass++; } else { g_fail++; }
+
+    /* ∫0^1 x^2 dx = 1/3 */
+    st = calculator_integrate("x^2", CALC_ANGLE_RAD, 0.0f, 1.0f, 200U, &v);
+    printf("  ∫0^1 x^2 dx      = %.6f %s\n", v,
+           ((st == CALC_OK) && (fabsf(v - 0.3333333f) < 1e-5f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(v - 0.3333333f) < 1e-5f)) { g_pass++; } else { g_fail++; }
+
+    /* ∫0^pi sin(x) dx = 2 */
+    st = calculator_integrate("s(x)", CALC_ANGLE_RAD, 0.0f, 3.14159265f, 200U, &v);
+    printf("  ∫0^pi sin(x) dx  = %.6f %s\n", v,
+           ((st == CALC_OK) && (fabsf(v - 2.0f) < 1e-5f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(v - 2.0f) < 1e-5f)) { g_pass++; } else { g_fail++; }
+
+    /* ∫0^1 e^x dx = e-1 = 1.718282 */
+    st = calculator_integrate("e^x", CALC_ANGLE_RAD, 0.0f, 1.0f, 200U, &v);
+    printf("  ∫0^1 e^x dx      = %.6f %s\n", v,
+           ((st == CALC_OK) && (fabsf(v - 1.7182818f) < 1e-5f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(v - 1.7182818f) < 1e-5f)) { g_pass++; } else { g_fail++; }
+
+    /* 角度制：∫0^90 sin(x°) dx = 180/pi ≈ 57.295780 */
+    st = calculator_integrate("s(x)", CALC_ANGLE_DEG, 0.0f, 90.0f, 200U, &v);
+    printf("  ∫0^90 sin(x°) dx = %.6f (期望 57.295780) %s\n", v,
+           ((st == CALC_OK) && (fabsf(v - 57.295780f) < 1e-3f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(v - 57.295780f) < 1e-3f)) { g_pass++; } else { g_fail++; }
+
+    /* 普通求值不允许 'x' */
+    st = calculator_evaluate("x", CALC_ANGLE_RAD, 0U, z, &out);
+    printf("  evaluate(\"x\")     -> status=%d %s\n", (int)st,
+           (st == CALC_SYNTAX) ? "ok" : "FAIL");
+    if (st == CALC_SYNTAX) { g_pass++; } else { g_fail++; }
+
+    /* 奇点：∫-1^1 1/x dx 必须报错，不能给个假数 */
+    st = calculator_integrate("1/x", CALC_ANGLE_RAD, -1.0f, 1.0f, 200U, &v);
+    printf("  ∫-1^1 1/x dx     -> status=%d %s\n", (int)st,
+           (st == CALC_DOMAIN) ? "ok" : "FAIL");
+    if (st == CALC_DOMAIN) { g_pass++; } else { g_fail++; }
+
+    /* 奇数段会被向上取到偶数 */
+    st = calculator_integrate("x^2", CALC_ANGLE_RAD, 0.0f, 1.0f, 3U, &v);
+    printf("  intervals=3      = %.6f %s\n", v,
+           ((st == CALC_OK) && (fabsf(v - 0.3333333f) < 1e-5f)) ? "ok" : "FAIL");
+    if ((st == CALC_OK) && (fabsf(v - 0.3333333f) < 1e-5f)) { g_pass++; } else { g_fail++; }
+  }
+
   printf("\n================ %d passed, %d failed ================\n", g_pass, g_fail);
   return (g_fail == 0) ? 0 : 1;
 }

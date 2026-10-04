@@ -31,6 +31,10 @@
 #define KEY_TASK_PERIOD_MS 10U
 #define HEARTBEAT_PERIOD_MS 500U
 
+/* 控制器等按键的超时（同时也是"角度制提示"的轮询周期），以及提示持续时长。 */
+#define CONTROLLER_POLL_MS 20U
+#define ANGLE_HINT_MS 900U
+
 /* ---------------------------------------------------------------------------
  * 消息类型
  * ------------------------------------------------------------------------ */
@@ -39,6 +43,11 @@ typedef struct
     char expression[APP_EXPR_MAX + 1U];
     uint8_t angle_unit; /* calc_angle_unit_t */
     uint8_t allow_complex;
+    /* integrate != 0 时按定积分处理：expression 里含变量 'x'，
+     * 在 [lower, upper] 上积分；此时忽略 allow_complex。 */
+    uint8_t integrate;
+    float lower;
+    float upper;
 } calc_request_t;
 
 typedef struct
@@ -102,13 +111,25 @@ static uint8_t s_shift;
 static uint8_t s_allow_complex;
 static calc_angle_unit_t s_angle;
 
+/* 按 FMT 切换角度/弧度后，第二行临时显示 DEG/RAD 的截止时刻（tick）。
+ * 0 表示当前没有提示。 */
+static uint32_t s_angle_hint_until;
+
 /* 解二次方程模式 */
-static uint8_t s_solve_mode;               /* 0=计算器主页 1=解方程 */
-static uint8_t s_solve_step;               /* 已录入的系数个数 0..2 */
+static uint8_t s_solve_mode;               /* 0=计算器主页 1=解方程 */static uint8_t s_solve_step;               /* 已录入的系数个数 0..2 */
 static uint8_t s_solved;                   /* 1=正在显示结果 */
 static float s_coeff[3];                   /* a、b、c */
 static char s_root1[APP_TEXT_MAX];
 static char s_root2[APP_TEXT_MAX];
+
+/* 定积分模式 */
+#define APP_INTEG_INTEGRALS 100U           /* Simpson的粗算段数 */
+
+static uint8_t s_integ_mode;
+static uint8_t s_integ_step;               /* 0=下界 1=上界 2=被积函数 */
+static uint8_t s_integ_done;               /* 1=已发出请求，等结果 */
+static float s_integ_lower;
+static float s_integ_upper;
 
 /* ---------------------------------------------------------------------------
  * 小的字符串/数字辅助函数
@@ -229,7 +250,7 @@ static void format_number(char *dst, uint8_t size, float value)
         return;
     }
 
-    /* 特别大 / 特别小的数用科学计数法。 */
+    /* 特别大/特别小的数用科学计数法。 */
     {
         uint8_t exponent = 0U;
 
@@ -412,6 +433,7 @@ static uint8_t render_expression(char *dst, uint8_t dst_size, uint8_t *cursor_ou
             case '*': dst[out] = (char)LCD_CHAR_MUL; break;
             case '/': dst[out] = (char)LCD_CHAR_DIV; break;
             case 'p': dst[out] = (char)LCD_CHAR_PI; break;
+            case 'x': dst[out] = (char)LCD_CHAR_X; break; /* 积分变量 */
             /* 乘方直接显示 ASCII 的 '^'，不用自定义字形 */
             default:  dst[out] = s_expr[in]; break;
         }
@@ -429,10 +451,7 @@ static uint8_t render_expression(char *dst, uint8_t dst_size, uint8_t *cursor_ou
     return out;
 }
 
-/* 把表达式渲染并开窗到 LCD 第 1 行，返回光标所在的列。
- *
- * first_col 是表达式起始列，前面的列留给调用者自己填（解方程模式用它放
- * "a="/"b="/"c=" 提示）。这些列不会被本函数覆盖。 */
+/* 把表达式渲染并开窗到 LCD 第 1 行，返回光标所在的列 */
 static uint8_t build_expression_line(char *line, uint8_t first_col)
 {
     char rendered[APP_EXPR_MAX + 1U];
@@ -493,12 +512,8 @@ static void align_right(char *dst, const char *text)
     dst[APP_LCD_COLS] = '\0';
 }
 
-/* ---------------------------------------------------------------------------
- * 解二次方程
- * ------------------------------------------------------------------------ */
-
-/* 用当前的输入求出一个系数。输入走完整表达式求值，返回 0 表示失败。 */
-static uint8_t solve_read_coefficient(float *out)
+/* 用当前的输入求出一个实数（解方程的系数、定积分的上下界都走这里） */
+static uint8_t read_real(float *out)
 {
     char engine[APP_EXPR_MAX + 1U];
     calc_complex_t result;
@@ -518,12 +533,16 @@ static uint8_t solve_read_coefficient(float *out)
     }
     if (fabsf(result.imag) > 1.0e-6f)
     {
-        return 0U; /* 系数必须是实数 */
+        return 0U; /* 必须是实数 */
     }
 
     *out = result.real;
     return 1U;
 }
+
+/* ---------------------------------------------------------------------------
+ * 解二次方程
+ * ------------------------------------------------------------------------ */
 
 static void solve_quadratic(void)
 {
@@ -557,6 +576,18 @@ static void solve_reset(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * 定积分
+ * ------------------------------------------------------------------------ */
+static void integ_reset(void)
+{
+    s_integ_step = 0U;
+    s_integ_done = 0U;
+    s_integ_lower = 0.0f;
+    s_integ_upper = 0.0f;
+    expr_clear();
+}
+
+/* ---------------------------------------------------------------------------
  * 显示内容的发布
  * ------------------------------------------------------------------------ */
 static void publish_status(void)
@@ -568,7 +599,14 @@ static void publish_status(void)
 
     cursor_column = build_expression_line(msg.line1, 0U);
 
-    /* 第二行状态：先显示复数标志 C，再显示 Shift 指示（上箭头自定义字形）。 */
+    /* 第二行状态。刚按过 FMT 时优先显示角度制提示，然后是复数标志 C 和
+     * Shift 指示（上箭头自定义字形）。 */
+    if (s_angle_hint_until != 0U)
+    {
+        memcpy(msg.line2, (s_angle == CALC_ANGLE_DEG) ? "DEG" : "RAD", 3U);
+        msg.line2[3] = '\0';
+    }
+    else
     {
         uint8_t pos = 0U;
 
@@ -630,9 +668,15 @@ static void publish_solve(void)
         msg.line1[1] = '=';
         msg.cursor_column = build_expression_line(msg.line1, 2U);
 
-        /* 第二行提示处于解方程模式 */
+        /* 第二行提示处于解方程模式（按 Shift 时追加指示箭头） */
         memcpy(msg.line2, "Solve mode", 10U);
         msg.line2[10] = '\0';
+        if (s_shift != 0U)
+        {
+            msg.line2[10] = ' ';
+            msg.line2[11] = (char)LCD_CHAR_UP;
+            msg.line2[12] = '\0';
+        }
 
         msg.cursor_enabled = 1U;
         msg.cursor_row = 0U;
@@ -641,12 +685,50 @@ static void publish_solve(void)
     (void)osMessageQueuePut(s_display_queue, &msg, 0U, 0U);
 }
 
+/* 定积分模式的显示：输入阶段第一行是 "a="/"b="/"f=" 加正在输入的内容，
+ * 第二行提示处于定积分模式；发出请求后等计算任务把结果写到第二行。 */
+static void publish_integ(void)
+{
+    display_msg_t msg;
+
+    memset(&msg, 0, sizeof(msg));
+
+    /* 0=下界 -> a=，1=上界 -> b=，2=被积函数 -> f= */
+    msg.line1[0] = (s_integ_step < 2U) ? (char)('a' + s_integ_step) : 'f';
+    msg.line1[1] = '=';
+    msg.cursor_column = build_expression_line(msg.line1, 2U);
+
+    memcpy(msg.line2, "Integral", 8U);
+    msg.line2[8] = '\0';
+    if (s_shift != 0U)
+    {
+        msg.line2[8] = ' ';
+        msg.line2[9] = (char)LCD_CHAR_UP;
+        msg.line2[10] = '\0';
+    }
+
+    msg.cursor_enabled = (s_integ_done == 0U) ? 1U : 0U;
+    msg.cursor_row = 0U;
+
+    (void)osMessageQueuePut(s_display_queue, &msg, 0U, 0U);
+}
+
+static void integ_toggle(void)
+{
+    if (s_integ_mode == 0U)
+    {
+        s_integ_mode = 1U;
+        integ_reset();
+        publish_integ();
+    }
+    else
+    {
+        s_integ_mode = 0U;
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * USB 串口终端
- *
- * CDC_Receive_FS() 运行在 USB 中断上下文里，那里不能调用可能阻塞的
- * CMSIS-RTOS2 队列接口，所以用一个单生产者（中断）/ 单消费者（任务）的
- * 环形缓冲区把数据交给任务处理。
  *
  * 主页按 Shift + 0 进入，整屏变成 16x2 终端；再按一次退出。
  * ------------------------------------------------------------------------ */
@@ -828,13 +910,16 @@ void app_init(void)
     s_angle = CALC_ANGLE_DEG;
     s_allow_complex = 0U;
     s_shift = 0U;
+    s_angle_hint_until = 0U;
     s_solve_mode = 0U; 
+    s_integ_mode = 0U;
     s_usb_mode = 0U;
     s_usb_dirty = 0U;
     s_usb_rx_head = 0U;
     s_usb_rx_tail = 0U;
     usb_term_clear();
     solve_reset();
+    integ_reset();
     expr_clear();
 }
 
@@ -897,8 +982,148 @@ void app_controller_task(void)
 
     for (;;)
     {
-        if (osMessageQueueGet(s_key_queue, &key, NULL, osWaitForever) != osOK)
+        /* 带超时地等按键：超时用来处理"角度制提示"的倒计时。
+         * 用时间戳而不是计数器，免得被其它分支的 continue 打乱节奏。 */
+        if (osMessageQueueGet(s_key_queue, &key, NULL, CONTROLLER_POLL_MS) != osOK)
         {
+            if ((s_angle_hint_until != 0U) &&
+                ((int32_t)(osKernelGetTickCount() - s_angle_hint_until) >= 0))
+            {
+                s_angle_hint_until = 0U;
+                publish_status();
+            }
+            continue;
+        }
+
+        /* ---- 定积分模式 ---- */
+        if (s_integ_mode != 0U)
+        {
+            /* Shift + 10^ 随时退出 */
+            if ((key == KEY_EXP) && (s_shift != 0U))
+            {
+                s_shift = 0U;
+                s_integ_mode = 0U;
+                integ_reset();
+                publish_status();
+                continue;
+            }
+
+            /* Shift 只翻转标志位，必须自己刷新一次显示 —— 否则箭头不会出现。
+             * 出结果后第二行归 publish_result 管，这里不能重画，否则会把结果
+             * 覆盖成 "Integral"。 */
+            if (key == KEY_SHIFT)
+            {
+                s_shift = (s_shift == 0U) ? 1U : 0U;
+                if (s_integ_done == 0U)
+                {
+                    publish_integ();
+                }
+                continue;
+            }
+
+            /* 结果已发出后，再按输入类按键就开始算下一个积分 */
+            if (s_integ_done != 0U)
+            {
+                if ((key == KEY_EXE) || (key == KEY_OK) || (key == KEY_DEL) ||
+                    (key == KEY_BACK) || (key == KEY_AC) ||
+                    (key == KEY_LEFT) || (key == KEY_RIGHT))
+                {
+                    continue; /* 忽略 */
+                }
+                integ_reset();
+            }
+
+            switch (key)
+            {
+                /* FMT 键：在被积函数这一步插入变量 x */
+                case KEY_FMT:
+                    if (s_integ_step >= 2U)
+                    {
+                        expr_insert('x');
+                    }
+                    break;
+
+                case KEY_EXE:
+                case KEY_OK:
+                    if (s_integ_step < 2U)
+                    {
+                        float value = 0.0f;
+
+                        if (read_real(&value) == 0U)
+                        {
+                            break; /* 非法输入，原地不动 */
+                        }
+                        if (s_integ_step == 0U)
+                        {
+                            s_integ_lower = value;
+                        }
+                        else
+                        {
+                            s_integ_upper = value;
+                        }
+                        s_integ_step++;
+                        expr_clear();
+                    }
+                    else if (s_len > 0U)
+                    {
+                        calc_request_t request;
+
+                        memset(&request, 0, sizeof(request));
+                        display_to_engine(s_expr, request.expression,
+                                          (uint8_t)sizeof(request.expression));
+                        request.angle_unit = (uint8_t)s_angle;
+                        request.allow_complex = 0U;
+                        request.integrate = 1U;
+                        request.lower = s_integ_lower;
+                        request.upper = s_integ_upper;
+
+                        if (osMessageQueuePut(s_calc_queue, &request, 0U, 0U) == osOK)
+                        {
+                            s_integ_done = 1U;
+                        }
+                    }
+                    break;
+
+                case KEY_AC:
+                    expr_clear();
+                    break;
+
+                case KEY_BACK:
+                case KEY_DEL:
+                    expr_backspace();
+                    break;
+
+                case KEY_LEFT:
+                    if (s_cursor > 0U)
+                    {
+                        s_cursor--;
+                    }
+                    break;
+
+                case KEY_RIGHT:
+                    if (s_cursor < s_len)
+                    {
+                        s_cursor++;
+                    }
+                    break;
+
+                default:
+                    if (key < KEY_COUNT)
+                    {
+                        if ((s_shift != 0U) && (key_shifted_text[key] != NULL))
+                        {
+                            expr_insert_text(key_shifted_text[key]);
+                        }
+                        else if (key_primary[key] != '\0')
+                        {
+                            expr_insert(key_primary[key]);
+                        }
+                    }
+                    break;
+            }
+
+            s_shift = 0U;
+            publish_integ();
             continue;
         }
 
@@ -939,6 +1164,7 @@ void app_controller_task(void)
             if (key == KEY_SHIFT)
             {
                 s_shift = (s_shift == 0U) ? 1U : 0U;
+                publish_solve(); /* 同上：解方程模式的箭头也要刷新显示 */
                 continue;
             }
 
@@ -961,7 +1187,7 @@ void app_controller_task(void)
                 {
                     float value = 0.0f;
 
-                    if (solve_read_coefficient(&value) != 0U)
+                    if (read_real(&value) != 0U)
                     {
                         s_coeff[s_solve_step] = value;
                         s_solve_step++;
@@ -1054,6 +1280,9 @@ void app_controller_task(void)
 
             case KEY_FMT:
                 s_angle = (s_angle == CALC_ANGLE_DEG) ? CALC_ANGLE_RAD : CALC_ANGLE_DEG;
+                /* 记下提示的截止时刻，循环末尾的 publish_status() 会显示它，
+                 * 到点后控制器超时分支再恢复成 "Calc Ready"。 */
+                s_angle_hint_until = osKernelGetTickCount() + ANGLE_HINT_MS;
                 s_shift = 0U;
                 break;
 
@@ -1104,6 +1333,18 @@ void app_controller_task(void)
                 s_shift = 0U;
                 break;
 
+            /* 10^ 键：Shift + 10^ 进入定积分模式。 */
+            case KEY_EXP:
+                if (s_shift != 0U)
+                {
+                    s_shift = 0U;
+                    integ_toggle();
+                    continue; /* 已经发过显示消息，跳过末尾的 publish */
+                }
+                expr_insert(key_primary[key]);
+                s_shift = 0U;
+                break;
+
             default:
                 if (key < KEY_COUNT)
                 {
@@ -1140,6 +1381,28 @@ void app_compute_task(void)
 
         if (osMessageQueueGet(s_calc_queue, &request, NULL, osWaitForever) != osOK)
         {
+            continue;
+        }
+
+        /* ---- 定积分请求 ---- */
+        if (request.integrate != 0U)
+        {
+            float value = 0.0f;
+
+            if (calculator_integrate(request.expression,
+                                     (calc_angle_unit_t)request.angle_unit,
+                                     request.lower, request.upper,
+                                     APP_INTEG_INTEGRALS, &value) != CALC_OK)
+            {
+                publish_result("domain err");
+            }
+            else
+            {
+                format_number(text, APP_TEXT_MAX, value);
+                s_last_answer.real = value;
+                s_last_answer.imag = 0.0f;
+                publish_result(text);
+            }
             continue;
         }
 

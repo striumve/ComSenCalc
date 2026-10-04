@@ -25,6 +25,9 @@
 #define LCD_CHAR_DIV    0x03U /* ÷ */
 #define LCD_CHAR_SQRT   0x04U /* √ */
 #define LCD_CHAR_UP     0x05U /* ↑，用作 Shift 指示 */
+/* 积分变量 x：字库内置的 ASCII 'x' 和 × 形状几乎一样，所以改用这个带粗端点
+ * 的自定义字形，靠形状（而不是大小）和 × 区分。 */
+#define LCD_CHAR_X      0x06U
 
 void screen_init(void);
 void screen_clear(void);

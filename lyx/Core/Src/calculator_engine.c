@@ -176,6 +176,10 @@ typedef struct
     uint16_t depth;
     calc_angle_unit_t angle;
     uint8_t allow_complex;
+    /* 变量 'x'：只有定积分才会打开 allow_x。普通求值时 'x' 是语法错误，
+     * 免得悄悄按 x=0 算出个看起来对的结果。 */
+    uint8_t allow_x;
+    float x_value;
     calc_complex_t answer;
     calc_status_t status;
 } calc_ctx_t;
@@ -399,6 +403,18 @@ static calc_complex_t parse_primary(calc_ctx_t *ctx)
         return ctx->answer;
     }
 
+    /* 变量 'x'：定积分用。没打开 allow_x 时按语法错误处理。 */
+    if (c == 'x')
+    {
+        if (ctx->allow_x == 0U)
+        {
+            ctx->status = CALC_SYNTAX;
+            return cx(0.0f, 0.0f);
+        }
+        ctx->pos++;
+        return cx(ctx->x_value, 0.0f);
+    }
+
     if (is_function_letter(c) != 0U)
     {
         char fn = c;
@@ -539,11 +555,15 @@ static calc_complex_t parse_expression(calc_ctx_t *ctx)
 /* ---------------------------------------------------------------------------
  * 对外接口
  * ------------------------------------------------------------------------ */
-calc_status_t calculator_evaluate(const char *expression,
-                                  calc_angle_unit_t angle_unit,
-                                  uint8_t allow_complex,
-                                  calc_complex_t answer,
-                                  calc_complex_t *result)
+
+/* 求值的内部实现。x_known 为 0 时表达式里不允许出现 'x'。 */
+static calc_status_t evaluate_internal(const char *expression,
+                                       calc_angle_unit_t angle_unit,
+                                       uint8_t allow_complex,
+                                       calc_complex_t answer,
+                                       uint8_t x_known,
+                                       float x_value,
+                                       calc_complex_t *result)
 {
     calc_ctx_t ctx;
     calc_complex_t value;
@@ -565,6 +585,8 @@ calc_status_t calculator_evaluate(const char *expression,
     ctx.depth = 0U;
     ctx.angle = angle_unit;
     ctx.allow_complex = allow_complex;
+    ctx.allow_x = x_known;
+    ctx.x_value = x_value;
     ctx.answer = answer;
     ctx.status = CALC_OK;
 
@@ -588,6 +610,142 @@ calc_status_t calculator_evaluate(const char *expression,
     }
 
     *result = value;
+    return CALC_OK;
+}
+
+calc_status_t calculator_evaluate(const char *expression,
+                                  calc_angle_unit_t angle_unit,
+                                  uint8_t allow_complex,
+                                  calc_complex_t answer,
+                                  calc_complex_t *result)
+{
+    return evaluate_internal(expression, angle_unit, allow_complex, answer,
+                             0U, 0.0f, result);
+}
+
+/* 在指定的 x 处求值并取出实部。返回 0 表示这一步不可用（语法错误、
+ * 结果是复数、或者出现 NaN/Inf）。 */
+static uint8_t integrate_sample(const char *expression,
+                                calc_angle_unit_t angle_unit,
+                                float x,
+                                float *out)
+{
+    calc_complex_t answer;
+    calc_complex_t value;
+
+    answer.real = 0.0f;
+    answer.imag = 0.0f;
+    value.real = 0.0f;
+    value.imag = 0.0f;
+
+    if (evaluate_internal(expression, angle_unit, 0U, answer,
+                          1U, x, &value) != CALC_OK)
+    {
+        return 0U;
+    }
+    if (fabsf(value.imag) > 1.0e-6f)
+    {
+        return 0U; /* 被积函数必须是实值的 */
+    }
+    if (isfinite(value.real) == 0)
+    {
+        return 0U;
+    }
+
+    *out = value.real;
+    return 1U;
+}
+
+/* 单次 Simpson 求和。段数必须是偶数。 */
+static calc_status_t simpson_sum(const char *expression,
+                                 calc_angle_unit_t angle_unit,
+                                 float lower,
+                                 float upper,
+                                 uint32_t intervals,
+                                 float *result)
+{
+    float h = (upper - lower) / (float)intervals;
+    float sum;
+    float f0;
+    float f1;
+    uint32_t i;
+
+    if (integrate_sample(expression, angle_unit, lower, &f0) == 0U)
+    {
+        return CALC_DOMAIN;
+    }
+    if (integrate_sample(expression, angle_unit, upper, &f1) == 0U)
+    {
+        return CALC_DOMAIN;
+    }
+    sum = f0 + f1;
+
+    for (i = 1U; i < intervals; i++)
+    {
+        float f;
+
+        if (integrate_sample(expression, angle_unit,
+                             lower + (h * (float)i), &f) == 0U)
+        {
+            return CALC_DOMAIN;
+        }
+        /* 奇数点权 4，偶数点权 2 */
+        sum += (((i % 2U) != 0U) ? 4.0f : 2.0f) * f;
+    }
+
+    *result = sum * h / 3.0f;
+    return CALC_OK;
+}
+
+calc_status_t calculator_integrate(const char *expression,
+                                   calc_angle_unit_t angle_unit,
+                                   float lower,
+                                   float upper,
+                                   uint32_t intervals,
+                                   float *result)
+{
+    float coarse;
+    float fine;
+
+    if (result == NULL)
+    {
+        return CALC_SYNTAX;
+    }
+    *result = 0.0f;
+
+    if (expression == NULL)
+    {
+        return CALC_SYNTAX;
+    }
+
+    /* Simpson 要求偶数段，且至少 2 段 */
+    if (intervals < 2U)
+    {
+        intervals = 2U;
+    }
+    if ((intervals % 2U) != 0U)
+    {
+        intervals++;
+    }
+
+    /* 用 n 段和 2n 段各算一次，收敛性检查 */
+    if (simpson_sum(expression, angle_unit, lower, upper, intervals, &coarse)
+        != CALC_OK)
+    {
+        return CALC_DOMAIN;
+    }
+    if (simpson_sum(expression, angle_unit, lower, upper, intervals * 2U, &fine)
+        != CALC_OK)
+    {
+        return CALC_DOMAIN;
+    }
+
+    if (fabsf(fine - coarse) > (1.0e-3f * (1.0f + fabsf(fine))))
+    {
+        return CALC_DOMAIN; /* 没收敛，拒绝给结果 */
+    }
+
+    *result = fine;
     return CALC_OK;
 }
 
