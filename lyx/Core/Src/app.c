@@ -116,7 +116,8 @@ static calc_angle_unit_t s_angle;
 static uint32_t s_angle_hint_until;
 
 /* 解二次方程模式 */
-static uint8_t s_solve_mode;               /* 0=计算器主页 1=解方程 */static uint8_t s_solve_step;               /* 已录入的系数个数 0..2 */
+static uint8_t s_solve_mode;               /* 0=计算器主页 1=解方程 */
+static uint8_t s_solve_step;               /* 已录入的系数个数 0..2 */
 static uint8_t s_solved;                   /* 1=正在显示结果 */
 static float s_coeff[3];                   /* a、b、c */
 static char s_root1[APP_TEXT_MAX];
@@ -178,27 +179,37 @@ static void append_fixed(char *dst, uint8_t size, uint8_t *pos, float value)
     uint32_t frac = scaled % 10000U;
     char digits[4];
     uint8_t n = 0U;
+    uint8_t first;
     uint8_t i;
 
     append_u32(dst, size, pos, whole);
 
+    /* 倒序填：digits[0] 是万分之一位（最低位），digits[3] 是十分位。 */
     for (i = 0U; i < 4U; i++)
     {
         digits[n] = (char)('0' + (frac % 10U));
         n++;
         frac /= 10U;
     }
-    while ((n > 0U) && (digits[n - 1U] == '0'))
+
+    /* 去掉末尾多余的 0。
+     * 因为 digits 是倒序存的，"小数点末尾"对应的是数组的**低**下标，所以要从
+     * digits[0] 往上找到第一个非零位，它才是有效数字的起点。
+     * （早期版本这里减的是 n，等于从高位往回砍，会把 "1.0001" 变成 "1.1"。） */
+    first = 0U;
+    while ((first < n) && (digits[first] == '0'))
     {
-        n--;
+        first++;
     }
-    if (n > 0U)
+
+    if (first < n) /* 还有非零位，才输出小数点 */
     {
         append_str(dst, size, pos, ".");
-        while ((n > 0U) && (*pos < (uint8_t)(size - 1U)))
+        i = n;
+        while ((i > first) && (*pos < (uint8_t)(size - 1U)))
         {
-            n--;
-            dst[*pos] = digits[n];
+            i--;
+            dst[*pos] = digits[i];
             (*pos)++;
         }
         dst[*pos] = '\0';

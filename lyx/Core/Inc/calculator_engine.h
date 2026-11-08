@@ -3,31 +3,30 @@
 
 #include <stdint.h>
 
-typedef enum
-{
-  CALC_ANGLE_DEG = 0,
-  CALC_ANGLE_RAD
+typedef enum {
+    CALC_ANGLE_DEG = 0,
+    CALC_ANGLE_RAD
 } calc_angle_unit_t;
 
-typedef struct
-{
-  float real;
-  float imag;
+typedef struct {
+    float real;
+    float imag;
 } calc_complex_t;
 
-typedef enum
-{
-  CALC_OK = 0,
-  CALC_SYNTAX,
-  CALC_DOMAIN,
-  CALC_DIV_ZERO
+typedef enum {
+    CALC_OK = 0,
+    CALC_SYNTAX,
+    CALC_DOMAIN,
+    CALC_DIV_ZERO
 } calc_status_t;
 
-calc_status_t calculator_evaluate(const char *expression,
-                                  calc_angle_unit_t angle_unit,
-                                  uint8_t allow_complex,
-                                  calc_complex_t answer,
-                                  calc_complex_t *result);
+calc_status_t calculator_evaluate(  // 返回计算状态
+    const char *expression,         // 输入的表达式
+    calc_angle_unit_t angle_unit,   // 角度单位
+    uint8_t allow_complex,          // 是否允许复数结果
+    calc_complex_t answer,          // 上次答案
+    calc_complex_t *result          // 计算结果
+);
 
 calc_status_t calculator_solve_linear(float a, float b, float *x);
 
